@@ -1,4 +1,4 @@
-"""Local dev server for the Futures POC dashboard.
+"""Local dev server for the Market Pulse dashboard.
 
 Serves the static frontend and proxies Yahoo Finance data through a
 same-origin API, since Yahoo's endpoints don't send CORS headers
@@ -20,11 +20,17 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
+import constituents
+import news
+import watchlist
+
 PORT = 8787
 PRICE_TTL_SECONDS = 15
 STATS_TTL_SECONDS = 300
 HISTORY_TTL_SECONDS = 3600
 INTRADAY_HISTORY_TTL_SECONDS = 60
+CONSTITUENTS_TTL_SECONDS = 300
+NEWS_TTL_SECONDS = 1800
 REQUEST_TIMEOUT = 8
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -278,7 +284,6 @@ def fetch_fundamentals(symbol):
 
     return {
         "pe": _raw(summary, "trailingPE"),
-        "peg": _raw(stats, "pegRatio"),
         "todayVolume": today_volume,
         "avgVolume": avg_volume,
         "inceptionDate": _raw(stats, "fundInceptionDate"),
@@ -293,7 +298,7 @@ def fetch_indicators(symbol):
 
 
 def fetch_stats_one(symbol):
-    stats = {"pe": None, "peg": None, "todayVolume": None, "avgVolume": None, "ema21": None, "rsi14": None}
+    stats = {"pe": None, "todayVolume": None, "avgVolume": None, "ema21": None, "rsi14": None}
     try:
         stats.update(fetch_fundamentals(symbol))
     except Exception as exc:  # noqa: BLE001
@@ -325,10 +330,13 @@ def fetch_history_payload(symbol, range_key):
     else:
         params = {"interval": cfg["interval"], "range": cfg["range"]}
 
-    timestamps, closes, _ = fetch_series(symbol, params)
+    timestamps, closes, volumes = fetch_series(symbol, params)
     ema21 = compute_ema(closes, 21)
+    rsi14 = compute_rsi(closes, 14)
     closes = [round(c, 4) for c in closes]
     ema21 = [round(v, 4) if v is not None else None for v in ema21]
+    rsi14 = [round(v, 4) if v is not None else None for v in rsi14]
+    volumes = [v if v is not None else None for v in volumes]
     return {
         "symbol": symbol,
         "range": range_key,
@@ -336,6 +344,8 @@ def fetch_history_payload(symbol, range_key):
         "timestamps": timestamps,
         "closes": closes,
         "ema21": ema21,
+        "rsi14": rsi14,
+        "volumes": volumes,
     }
 
 
@@ -363,6 +373,7 @@ class Cache:
 
 price_cache = Cache(PRICE_TTL_SECONDS, fetch_all_prices)
 stats_cache = Cache(STATS_TTL_SECONDS, fetch_all_stats)
+watchlist_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_payload)
 
 _history_cache = {}
 _history_lock = threading.Lock()
@@ -381,6 +392,44 @@ def get_history(symbol, range_key):
     data = fetch_history_payload(symbol, range_key)
     with _history_lock:
         _history_cache[cache_key] = {"data": data, "ts": time.time()}
+    return data
+
+
+_constituents_cache = {}
+_constituents_lock = threading.Lock()
+
+
+def get_constituents(symbol):
+    with _constituents_lock:
+        entry = _constituents_cache.get(symbol)
+        now = time.time()
+        if entry and (now - entry["ts"]) <= CONSTITUENTS_TTL_SECONDS:
+            return entry["data"]
+
+    data = constituents.fetch_constituents_payload(symbol)
+    with _constituents_lock:
+        _constituents_cache[symbol] = {"data": data, "ts": time.time()}
+    return data
+
+
+WATCHLIST_BY_RAW_SYMBOL = {t["symbol"]: t for t in watchlist.WATCHLIST_TICKERS}
+
+_news_cache = {}
+_news_lock = threading.Lock()
+
+
+def get_news(raw_symbol):
+    entry_meta = WATCHLIST_BY_RAW_SYMBOL[raw_symbol]
+    with _news_lock:
+        entry = _news_cache.get(raw_symbol)
+        now = time.time()
+        if entry and (now - entry["ts"]) <= NEWS_TTL_SECONDS:
+            return entry["data"]
+
+    display_symbol = entry_meta.get("label", raw_symbol)
+    data = news.fetch_news_payload(display_symbol, raw_symbol, entry_meta["name"])
+    with _news_lock:
+        _news_cache[raw_symbol] = {"data": data, "ts": time.time()}
     return data
 
 
@@ -404,7 +453,6 @@ def build_quotes_response():
                     "change": p.get("change"),
                     "changePercent": p.get("changePercent"),
                     "pe": s.get("pe"),
-                    "peg": s.get("peg"),
                     "ema21": s.get("ema21"),
                     "rsi14": s.get("rsi14"),
                     "todayVolume": s.get("todayVolume"),
@@ -435,12 +483,43 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_quotes()
         elif parsed.path == "/api/history":
             self._handle_history(parse_qs(parsed.query))
+        elif parsed.path == "/api/constituents":
+            self._handle_constituents(parse_qs(parsed.query))
+        elif parsed.path == "/api/watchlist":
+            self._handle_watchlist()
+        elif parsed.path == "/api/news":
+            self._handle_news(parse_qs(parsed.query))
         else:
             self._serve_static(parsed.path)
 
     def _handle_quotes(self):
         try:
             data = build_quotes_response()
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
+    def _handle_watchlist(self):
+        try:
+            data = watchlist_cache.get()
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
+    def _handle_news(self, query):
+        symbols = query.get("symbol")
+        if not symbols:
+            self._send_json({"error": "missing symbol"}, status=400)
+            return
+        symbol = symbols[0]
+        if symbol not in WATCHLIST_BY_RAW_SYMBOL:
+            self._send_json({"error": "unknown symbol"}, status=404)
+            return
+
+        try:
+            data = get_news(symbol)
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return
@@ -463,6 +542,23 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             data = get_history(symbol, range_key)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
+    def _handle_constituents(self, query):
+        symbols = query.get("symbol")
+        if not symbols:
+            self._send_json({"error": "missing symbol"}, status=400)
+            return
+        symbol = symbols[0]
+        if symbol not in ALL_SYMBOLS:
+            self._send_json({"error": "unknown symbol"}, status=404)
+            return
+
+        try:
+            data = get_constituents(symbol)
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return

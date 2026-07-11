@@ -6,5 +6,8 @@ services:
     name: market-pulse-dashboard
     runtime: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    # The playwright install is best-effort: if Render's free tier can't
+    # fit the Chromium download, the app still works fine — the Invesco
+    # (QQQ/RSP) constituents heatmap just degrades to a top-20 fallback.
+    buildCommand: "pip install -r requirements.txt && (playwright install --with-deps chromium || true)"
     startCommand: "python server.py"

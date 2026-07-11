@@ -1,2 +1,9 @@
-# No external dependencies — server.py only uses the Python standard library.
-# This file exists so Render (and other platforms) detect this as a Python app.
+# server.py itself only uses the Python standard library. These two are
+# only needed by constituents.py, for the ETF holdings heatmap:
+openpyxl>=3.1        # parses SPDR's public XLSX holdings files
+playwright>=1.40      # full Invesco holdings via Schwab's research widget;
+                       # optional at runtime -- constituents.py degrades to
+                       # a plain-HTTP top-20 fetch if this isn't installed
+                       # or its browser binary isn't available (e.g. on a
+                       # host where `playwright install chromium` hasn't
+                       # been run, such as Render's free tier).

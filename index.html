@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Futures POC Dashboard</title>
+<title>Market Pulse</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 <div class="app">
   <header class="app-header">
-    <h1>Futures POC Dashboard</h1>
+    <h1>Market Pulse</h1>
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="market-pulse" role="tab" aria-selected="true">Market Pulse</button>
       <button class="tab" data-tab="relevant-news" role="tab" aria-selected="false">Relevant News</button>
@@ -34,15 +34,35 @@
           </div>
           <div class="chart-controls">
             <select id="chart-ticker-select"></select>
-            <span class="legend"><i class="swatch price"></i>Price</span>
-            <span class="legend"><i class="swatch ema"></i>21 EMA</span>
           </div>
         </div>
         <div id="range-select" class="range-select"></div>
+        <div class="indicator-toggles" id="indicator-toggles">
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-ema" checked />
+            <i class="swatch ema"></i>21 EMA
+          </label>
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-rsi" />
+            <i class="swatch rsi"></i>RSI (14)
+          </label>
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-volume" checked />
+            <i class="swatch volume"></i>Volume
+          </label>
+        </div>
         <div id="chart-meta" class="chart-meta"></div>
         <div class="chart-canvas-wrap">
           <canvas id="price-chart" height="260"></canvas>
           <div id="chart-status" class="chart-status"></div>
+        </div>
+        <div class="chart-subpanel" id="rsi-subpanel" hidden>
+          <div class="subpanel-label">RSI (14)</div>
+          <canvas id="rsi-chart" height="90"></canvas>
+        </div>
+        <div class="chart-subpanel" id="volume-subpanel">
+          <div class="subpanel-label">Volume</div>
+          <canvas id="volume-chart" height="70"></canvas>
         </div>
       </div>
 
@@ -62,10 +82,38 @@
         <button id="refresh-btn" class="refresh-btn">Refresh</button>
       </div>
       <div id="groups" class="groups-stack"></div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          ETF constituents heatmap
+          <select id="constituents-ticker-select" class="constituents-ticker-select"></select>
+        </div>
+        <div id="constituents-meta" class="chart-meta constituents-meta"></div>
+        <div id="constituents-heatmap" class="constituents-heatmap">
+          <div class="chart-status static">Loading…</div>
+        </div>
+      </div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          Watchlist heatmap
+        </div>
+        <div id="watchlist-heatmap" class="overview-heatmap">
+          <div class="chart-status static">Loading…</div>
+        </div>
+      </div>
     </section>
 
     <section id="relevant-news" class="tab-panel">
-      <div class="placeholder">Relevant News — coming soon</div>
+      <div class="panel-toolbar">
+        <span id="news-updated-at" class="updated-at">Loading…</span>
+        <button id="news-expand-all-btn" class="refresh-btn">Expand all</button>
+      </div>
+      <div id="news-cards" class="news-cards">
+        <div class="chart-status static">Loading…</div>
+      </div>
     </section>
   </main>
 </div>
