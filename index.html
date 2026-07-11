@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Futures POC Dashboard</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <h1>Futures POC Dashboard</h1>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="market-pulse" role="tab" aria-selected="true">Market Pulse</button>
+      <button class="tab" data-tab="relevant-news" role="tab" aria-selected="false">Relevant News</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="market-pulse" class="tab-panel active">
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          Today's advance / decline — all tickers
+        </div>
+        <div id="overview-heatmap" class="overview-heatmap"></div>
+      </div>
+
+      <div class="chart-panel">
+        <div class="chart-panel-header">
+          <div class="chart-title">
+            <span class="dot" style="background: var(--blue)"></span>
+            Price chart
+          </div>
+          <div class="chart-controls">
+            <select id="chart-ticker-select"></select>
+            <span class="legend"><i class="swatch price"></i>Price</span>
+            <span class="legend"><i class="swatch ema"></i>21 EMA</span>
+          </div>
+        </div>
+        <div id="range-select" class="range-select"></div>
+        <div id="chart-meta" class="chart-meta"></div>
+        <div class="chart-canvas-wrap">
+          <canvas id="price-chart" height="260"></canvas>
+          <div id="chart-status" class="chart-status"></div>
+        </div>
+      </div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          Daily calendar heatmap
+          <span class="calendar-ticker-label" id="calendar-ticker-label"></span>
+        </div>
+        <div id="calendar-heatmap" class="calendar-heatmap">
+          <div id="calendar-status" class="chart-status static">Loading…</div>
+        </div>
+      </div>
+
+      <div class="panel-toolbar">
+        <span id="updated-at" class="updated-at">Loading…</span>
+        <button id="refresh-btn" class="refresh-btn">Refresh</button>
+      </div>
+      <div id="groups" class="groups-stack"></div>
+    </section>
+
+    <section id="relevant-news" class="tab-panel">
+      <div class="placeholder">Relevant News — coming soon</div>
+    </section>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

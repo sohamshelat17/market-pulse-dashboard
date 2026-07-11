@@ -1,0 +1,2 @@
+# No external dependencies — server.py only uses the Python standard library.
+# This file exists so Render (and other platforms) detect this as a Python app.

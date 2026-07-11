@@ -1,0 +1,10 @@
+# Render Blueprint — lets Render auto-configure this service when you pick
+# "New +" > "Blueprint" and point it at this repo. Manual "Web Service"
+# setup works too; see README.md for those exact settings.
+services:
+  - type: web
+    name: market-pulse-dashboard
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python server.py"
