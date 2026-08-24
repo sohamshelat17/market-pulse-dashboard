@@ -12,6 +12,7 @@ Then open: http://127.0.0.1:8787
 import http.cookiejar
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,7 @@ REQUEST_TIMEOUT = 8
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 
 # Chart range presets. "ALL" is special-cased to use period1=0 instead of
 # range=max, since Yahoo silently coarsens range=max to ~monthly bars
@@ -43,6 +45,7 @@ RANGE_CONFIGS = {
     "1D": {"range": "1d", "interval": "2m", "intraday": True},
     "5D": {"range": "5d", "interval": "15m", "intraday": True},
     "1M": {"range": "1mo", "interval": "1d"},
+    "3M": {"range": "3mo", "interval": "1d"},
     "6M": {"range": "6mo", "interval": "1d"},
     "YTD": {"range": "ytd", "interval": "1d"},
     "1Y": {"range": "1y", "interval": "1d"},
@@ -62,6 +65,7 @@ TICKER_GROUPS = [
             {"symbol": "SPY", "name": "S&P 500"},
             {"symbol": "QQQ", "name": "Nasdaq-100"},
             {"symbol": "RSP", "name": "Equal weight"},
+            {"symbol": "IWM", "name": "Small caps"},
             {"symbol": "^VIX", "label": "VIX", "name": "Volatility"},
         ],
     },
@@ -95,9 +99,31 @@ TICKER_GROUPS = [
             {"symbol": "EWY", "name": "South Korea"},
         ],
     },
+    {
+        "group": "Thematic Trends",
+        "accent": "amber",
+        "tickers": [
+            {"symbol": "SMH", "name": "Semiconductors"},
+            {"symbol": "DRAM", "name": "Memory"},
+            {"symbol": "EUV", "name": "Photonics"},
+            {"symbol": "IGV", "name": "Software"},
+            {"symbol": "CIBR", "name": "Cybersecurity"},
+            {"symbol": "WGMI", "name": "HPC"},
+            {"symbol": "DTCR", "name": "Data centers"},
+            {"symbol": "BOTZ", "name": "Robotics"},
+            {"symbol": "ARKX", "name": "Space"},
+            {"symbol": "NLR", "name": "Nuclear"},
+            {"symbol": "QTUM", "name": "Quantum"},
+        ],
+    },
 ]
 
 ALL_SYMBOLS = [t["symbol"] for grp in TICKER_GROUPS for t in grp["tickers"]]
+
+# The "Stock chart" panel accepts an arbitrary ticker (not just the tracked
+# ETF list), so /api/history validates shape rather than list membership --
+# Yahoo's own response is the real authority on whether the symbol exists.
+ARBITRARY_SYMBOL_RE = re.compile(r"^\^?[A-Za-z0-9.\-]{1,15}$")
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +345,33 @@ def fetch_all_stats():
     return stats
 
 
+SEARCH_QUOTE_TYPES = {"EQUITY", "ETF", "INDEX"}
+
+
+def fetch_symbol_search(query):
+    """Ticker-autocomplete for the Stock chart's free-text input -- Yahoo's
+    own search endpoint, same public/no-auth pattern as the chart API.
+    Restricted to stocks/ETFs/indices -- futures, mutual funds, and crypto
+    pairs from the raw results are mostly noise for this use case (many
+    have no real display name, just a repeated internal id)."""
+    url = f"{SEARCH_URL}?{urlencode({'q': query, 'quotesCount': 8, 'newsCount': 0})}"
+    payload = fetch_json(url)
+    results = []
+    for q in payload.get("quotes", []):
+        symbol = q.get("symbol")
+        if not symbol or q.get("quoteType") not in SEARCH_QUOTE_TYPES:
+            continue
+        results.append(
+            {
+                "symbol": symbol,
+                "name": q.get("shortname") or q.get("longname") or symbol,
+                "exchange": q.get("exchange"),
+                "type": q.get("quoteType"),
+            }
+        )
+    return results
+
+
 def fetch_history_payload(symbol, range_key):
     cfg = RANGE_CONFIGS.get(range_key, RANGE_CONFIGS[DEFAULT_RANGE])
     if cfg.get("period0"):
@@ -331,9 +384,11 @@ def fetch_history_payload(symbol, range_key):
         params = {"interval": cfg["interval"], "range": cfg["range"]}
 
     timestamps, closes, volumes = fetch_series(symbol, params)
+    ema8 = compute_ema(closes, 8)
     ema21 = compute_ema(closes, 21)
     rsi14 = compute_rsi(closes, 14)
     closes = [round(c, 4) for c in closes]
+    ema8 = [round(v, 4) if v is not None else None for v in ema8]
     ema21 = [round(v, 4) if v is not None else None for v in ema21]
     rsi14 = [round(v, 4) if v is not None else None for v in rsi14]
     volumes = [v if v is not None else None for v in volumes]
@@ -343,6 +398,7 @@ def fetch_history_payload(symbol, range_key):
         "intraday": bool(cfg.get("intraday")),
         "timestamps": timestamps,
         "closes": closes,
+        "ema8": ema8,
         "ema21": ema21,
         "rsi14": rsi14,
         "volumes": volumes,
@@ -433,6 +489,32 @@ def get_news(raw_symbol):
     return data
 
 
+def fetch_news_feed():
+    """News + material events + insider summary for every watchlist ticker,
+    fetched in parallel. Each ticker's result is still cached individually
+    via get_news()'s own TTL, so repeat feed loads within that window are
+    fast even though this itself has no separate cache."""
+    tickers = []
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {pool.submit(get_news, t["symbol"]): t for t in watchlist.WATCHLIST_TICKERS}
+        for future, meta in futures.items():
+            try:
+                tickers.append(future.result())
+            except Exception as exc:  # noqa: BLE001
+                tickers.append(
+                    {
+                        "symbol": meta.get("label", meta["symbol"]),
+                        "rawSymbol": meta["symbol"],
+                        "name": meta["name"],
+                        "newsItems": [],
+                        "materialEvents": [],
+                        "insiderSummary": None,
+                        "error": str(exc),
+                    }
+                )
+    return {"tickers": tickers, "generatedAt": time.time()}
+
+
 def build_quotes_response():
     prices = price_cache.get()
     stats = stats_cache.get()
@@ -489,6 +571,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_watchlist()
         elif parsed.path == "/api/news":
             self._handle_news(parse_qs(parsed.query))
+        elif parsed.path == "/api/news/feed":
+            self._handle_news_feed()
+        elif parsed.path == "/api/symbol-search":
+            self._handle_symbol_search(parse_qs(parsed.query))
         else:
             self._serve_static(parsed.path)
 
@@ -525,14 +611,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_json(data)
 
+    def _handle_symbol_search(self, query):
+        q = (query.get("q") or [""])[0].strip()
+        if not q:
+            self._send_json({"results": []})
+            return
+        try:
+            results = fetch_symbol_search(q)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json({"results": results})
+
+    def _handle_news_feed(self):
+        try:
+            data = fetch_news_feed()
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
     def _handle_history(self, query):
         symbols = query.get("symbol")
         if not symbols:
             self._send_json({"error": "missing symbol"}, status=400)
             return
-        symbol = symbols[0]
-        if symbol not in ALL_SYMBOLS:
-            self._send_json({"error": "unknown symbol"}, status=404)
+        symbol = symbols[0].strip().upper()
+        if not ARBITRARY_SYMBOL_RE.match(symbol):
+            self._send_json({"error": "invalid symbol"}, status=400)
             return
 
         range_key = (query.get("range") or [DEFAULT_RANGE])[0].upper()

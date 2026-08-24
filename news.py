@@ -79,15 +79,75 @@ BLOCKED_SOURCE_KEYWORDS = [
 NOISY_TITLE_PATTERNS = [
     re.compile(r"shares (acquired|bought|sold|purchased) by", re.IGNORECASE),
 ]
+# "Should you buy?", "Top 5 stocks to buy", and sell-side analyst-call
+# blurbs ("initiates coverage", "price target", "X upgrades Y to Buy") are
+# the two biggest categories of low-signal noise on a per-ticker news feed.
+# Blocked by title pattern regardless of source -- even a wire service
+# reprints these verbatim, and they're never what "relevant news" means
+# for an investment thesis. Real credit-rating-agency actions ("Moody's
+# downgrades X's debt to Ba1") don't trip these -- they don't use "rating"
+# or "price target" the way a stock analyst call does.
+CLICKBAIT_TITLE_PATTERNS = [
+    re.compile(r"should you (add|buy|sell)", re.IGNORECASE),
+    # Covers "Is X Stock a Buy?", "...Is The Stock A Buy Now?", "Is X a
+    # Buy, a Sell, or Fairly Valued?", and the negated "...Still Isn't a
+    # Buy" form -- Morningstar/Yahoo Finance's most common opinion-piece
+    # template, regardless of what's between "is" and "a buy/sell".
+    re.compile(r"\bis(?:n't|\s+not)?\b.{0,50}\b(a\s+buy|a\s+sell)\b", re.IGNORECASE),
+    re.compile(r"\bbuy or sell\b", re.IGNORECASE),
+    re.compile(r"\bbetter buy\b", re.IGNORECASE),
+    re.compile(r"\btime to (buy|sell)\b", re.IGNORECASE),
+    re.compile(r"\bwhy you should (buy|sell|avoid)\b", re.IGNORECASE),
+    re.compile(r"\bstocks?\s+to\s+(buy|sell|watch|avoid)\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+stocks?\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+reasons?\s+why\b", re.IGNORECASE),
+    # The other recurring content-mill template: valuation-opinion pieces
+    # ("Could Be 20% Overvalued", "Looks Pricey On Cash Flow, Fair On
+    # Earnings") that route through Yahoo Finance's own byline (so the
+    # BLOCKED_SOURCE_KEYWORDS check on "simply wall st" doesn't catch the
+    # syndicated copy) and would otherwise sneak past MATERIAL_EVENT_KEYWORDS
+    # just by mentioning "earnings" or "dividend" in passing.
+    re.compile(r"\bfairly valued\b", re.IGNORECASE),
+    re.compile(r"\b(over|under)valued\b", re.IGNORECASE),
+    re.compile(r"\bfair value\b", re.IGNORECASE),
+    re.compile(r"\blooks (pricey|cheap|expensive)\b", re.IGNORECASE),
+    re.compile(r"\bprice target\b", re.IGNORECASE),
+    re.compile(r"\binitiat(?:es|ed|ing) coverage\b", re.IGNORECASE),
+    re.compile(r"\breiterat(?:es|ed|ing)\b", re.IGNORECASE),
+    re.compile(r"\b(upgrad|downgrad)(?:es|ed|ing)?\s+(to|from)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(buy|sell|hold|overweight|underweight|neutral|outperform|underperform|market perform)\s+rating\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\banalysts?\b.{0,40}\b(says?|forecasts?|recommends?|rating|estimate)\b", re.IGNORECASE),
+]
+# Real news about a well-known outside investor/fund building or exiting a
+# position (e.g. "Berkshire boosts stake in X") is exactly the kind of
+# signal this feed should surface -- unlike the generic 13F-blurb spam
+# NOISY_TITLE_PATTERNS blocks, so it bypasses the material-keyword
+# requirement below for untrusted sources (it still has to clear the
+# clickbait/blocked-source checks first).
+SUPER_INVESTOR_KEYWORDS = [
+    "warren buffett", "berkshire hathaway", "michael burry", "scion asset management",
+    "bill ackman", "pershing square", "ray dalio", "bridgewater associates",
+    "cathie wood", "ark invest", "carl icahn", "icahn enterprises",
+    "stanley druckenmiller", "duquesne", "george soros", "soros fund",
+    "david tepper", "appaloosa", "seth klarman", "baupost",
+    "dan loeb", "third point", "nelson peltz", "trian partners",
+]
 MATERIAL_EVENT_KEYWORDS = [
     # Deliberately no bare "forecast" -- it mostly catches generic "stock
     # price forecast/prediction" technical-analysis clickbait rather than
-    # actual company guidance, which "guidance" already covers.
+    # actual company guidance, which "guidance" already covers. Also no
+    # bare "downgrade"/"upgrade" -- CLICKBAIT_TITLE_PATTERNS handles the
+    # (much more common) analyst-rating-change sense explicitly, so a bare
+    # match here would just let that same noise back in from untrusted
+    # sources.
     "earnings", "results", "guidance", "revenue", "profit",
     "loss", "lawsuit", "sues", "sued", "sec charges", "investigation",
     "subpoena", "recall", "merger", "acquir", "buyout", "takeover",
     "resigns", "resignation", "appoints", "appointed", "layoff", "bankrupt",
-    "downgrade", "upgrade", "dividend", "buyback", "stock split", "delist",
+    "dividend", "buyback", "stock split", "delist",
     "fraud", "settlement", "fined", "antitrust", "breach", "hack", "outage",
     "fda approval", "patent",
 ]
@@ -99,9 +159,20 @@ def _passes_material_filter(title, source):
     source_lower = (source or "").lower()
     if any(k in source_lower for k in BLOCKED_SOURCE_KEYWORDS):
         return False
+
+    title_lower = title.lower()
+    is_super_investor = any(k in title_lower for k in SUPER_INVESTOR_KEYWORDS)
+
+    if any(p.search(title) for p in CLICKBAIT_TITLE_PATTERNS):
+        # A genuine "Berkshire adds 2 stocks in its Q2 13F" headline can
+        # superficially match a clickbait pattern (e.g. the bare "N stocks"
+        # rule) -- let a real super-investor headline survive that; nothing
+        # else gets a pass here.
+        return is_super_investor
+    if is_super_investor:
+        return True
     if any(k in source_lower for k in TRUSTED_SOURCE_KEYWORDS):
         return True
-    title_lower = title.lower()
     return any(k in title_lower for k in MATERIAL_EVENT_KEYWORDS)
 
 TRANSACTION_CODE_LABELS = {
