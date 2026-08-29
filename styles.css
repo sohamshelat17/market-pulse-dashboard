@@ -254,8 +254,10 @@ body {
 }
 
 .swatch.price { background: var(--blue); }
-.swatch.ema8 { background: #22d3ee; }
+.swatch.ema8 { background: #a855f7; }
 .swatch.ema { background: #f59e0b; }
+.swatch.ema50 { background: #ec4899; }
+.swatch.ema200 { background: #a3e635; }
 .swatch.rsi { background: var(--violet); }
 .swatch.volume { background: #64748b; }
 
@@ -586,15 +588,47 @@ body {
 }
 
 .timeseries-row-label {
-  flex: 0 0 60px;
+  flex: 0 0 150px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.timeseries-row-symbol {
+  flex: 0 0 auto;
   font-size: 10.5px;
   font-weight: 700;
   color: var(--text-primary);
-  text-align: right;
-  white-space: nowrap;
+}
+
+.timeseries-row-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.timeseries-row-summary {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 7px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+
+.timeseries-count {
+  font-weight: 700;
+}
+
+.timeseries-count.up { color: var(--green); }
+.timeseries-count.down { color: var(--red); }
 
 .timeseries-strip {
   display: grid;

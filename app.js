@@ -279,7 +279,7 @@ function renderWatchlistHeatmap(tickers) {
 // recent month (timeseriesWindowDays) until the user picks a wider window.
 // ---------------------------------------------------------------------------
 
-const TIMESERIES_LABEL_WIDTH = 60;
+const TIMESERIES_LABEL_WIDTH = 150;
 const TIMESERIES_LABEL_GAP = 6;
 const TIMESERIES_WINDOWS = [
   { key: "7D", label: "7D", days: 7 },
@@ -387,10 +387,18 @@ function renderTimeseriesHeatmap(container, results, windowDays) {
       rowsHtml.push(`<div class="timeseries-group-label">${currentGroup}</div>`);
     }
 
+    // Advance/decline day count for the selected window -- how many of
+    // this ticker's real (non-empty) cells were green vs red -- so
+    // sector rotation shows up as a number, not just a color impression,
+    // and stays visible without scrolling even on the widest (1Y) strip.
+    let upCount = 0;
+    let downCount = 0;
     const cellsHtml = longestDates
       .map((key) => {
         const entry = byDate.get(key);
         if (!entry) return `<div class="timeseries-cell empty" style="height:${cellHeight}px"></div>`;
+        if (entry.pct >= 0) upCount++;
+        else downCount++;
         const pctText = `${entry.pct >= 0 ? "+" : ""}${entry.pct.toFixed(2)}%`;
         const title = `${ticker.symbol} — ${entry.date.toLocaleDateString()}: ${pctText}`;
         return `<div class="timeseries-cell" style="background:${heatColor(entry.pct, 2.5)};height:${cellHeight}px" title="${title}"></div>`;
@@ -399,7 +407,14 @@ function renderTimeseriesHeatmap(container, results, windowDays) {
 
     rowsHtml.push(`
       <div class="timeseries-row">
-        <span class="timeseries-row-label" title="${ticker.name}">${ticker.symbol}</span>
+        <span class="timeseries-row-label" title="${ticker.name}">
+          <span class="timeseries-row-symbol">${ticker.symbol}</span>
+          <span class="timeseries-row-desc">${ticker.name}</span>
+        </span>
+        <span class="timeseries-row-summary" title="${upCount} up day${upCount === 1 ? "" : "s"}, ${downCount} down day${downCount === 1 ? "" : "s"} in this window">
+          <span class="timeseries-count up">${upCount}↑</span>
+          <span class="timeseries-count down">${downCount}↓</span>
+        </span>
         <div class="timeseries-strip" style="grid-template-columns: repeat(${longestDates.length}, ${cellWidth}px)">${cellsHtml}</div>
       </div>
     `);
@@ -443,6 +458,19 @@ function initTimeseriesWindowButtons() {
 // external code (the shared primary-ticker cascade) own that one select's
 // change handling instead of the controller auto-wiring it.
 // ---------------------------------------------------------------------------
+
+// Shared price-chart palette -- every overlaid series (price + the four
+// EMAs) gets a hue far enough from its neighbors that none read as
+// "basically the same line" even at a glance. Reused by the draw
+// functions, the hover-tooltip text, and the toggle-pill swatches in CSS
+// (keep those in sync with these hex values).
+const INDICATOR_COLORS = {
+  price: "#3b82f6",
+  ema8: "#a855f7",
+  ema21: "#f59e0b",
+  ema50: "#ec4899",
+  ema200: "#a3e635",
+};
 
 function formatAxisLabel(date, range) {
   if (range === "1D") return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -494,7 +522,7 @@ function createPriceChartController(ids) {
     layout: null,
     overlayCtx: null,
     dragState: null, // null | {startIndex, endIndex, active}
-    toggles: { ema8: true, ema: true, rsi: false, volume: true },
+    toggles: { ema8: true, ema: true, ema50: false, ema200: false, rsi: false, volume: true },
   };
 
   function sizeOverlayCanvasToMatch(width, height) {
@@ -516,7 +544,7 @@ function createPriceChartController(ids) {
     const height = 260;
     const { ctx, width } = setupCanvas(canvas, height);
 
-    const { closes, ema8, ema21, timestamps, range } = data;
+    const { closes, ema8, ema21, ema50, ema200, timestamps, range } = data;
     if (!closes || closes.length < 2) {
       state.layout = null;
       return;
@@ -526,12 +554,16 @@ function createPriceChartController(ids) {
     const plotW = width - padding.left - padding.right;
     const plotH = height - padding.top - padding.bottom;
 
-    const showEma8 = state.toggles.ema8;
-    const showEma21 = state.toggles.ema;
-    const emaValues = []
-      .concat(showEma8 && ema8 ? ema8.filter((v) => v !== null && v !== undefined) : [])
-      .concat(showEma21 && ema21 ? ema21.filter((v) => v !== null && v !== undefined) : []);
-    const allValues = closes.concat(emaValues);
+    const emaSeries = [
+      { key: "ema8", values: ema8, color: INDICATOR_COLORS.ema8 },
+      { key: "ema", values: ema21, color: INDICATOR_COLORS.ema21 },
+      { key: "ema50", values: ema50, color: INDICATOR_COLORS.ema50 },
+      { key: "ema200", values: ema200, color: INDICATOR_COLORS.ema200 },
+    ];
+    const visibleEmaValues = emaSeries
+      .filter((s) => state.toggles[s.key] && s.values)
+      .flatMap((s) => s.values.filter((v) => v !== null && v !== undefined));
+    const allValues = closes.concat(visibleEmaValues);
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
     const span = max - min || 1;
@@ -565,7 +597,7 @@ function createPriceChartController(ids) {
     });
 
     // price line
-    ctx.strokeStyle = "#3b82f6";
+    ctx.strokeStyle = INDICATOR_COLORS.price;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     closes.forEach((v, i) => {
@@ -576,8 +608,9 @@ function createPriceChartController(ids) {
     });
     ctx.stroke();
 
-    if (showEma8 && ema8) drawEmaLine(ctx, ema8, "#22d3ee", xAt, yAt);
-    if (showEma21 && ema21) drawEmaLine(ctx, ema21, "#f59e0b", xAt, yAt);
+    emaSeries.forEach((s) => {
+      if (state.toggles[s.key] && s.values) drawEmaLine(ctx, s.values, s.color, xAt, yAt);
+    });
 
     state.layout = { padding, plotW, plotH, width, height, min, max, span, xAt, yAt, closes, timestamps, range, n: closes.length };
     sizeOverlayCanvasToMatch(width, height);
@@ -679,10 +712,12 @@ function createPriceChartController(ids) {
     const fmtEma = (v) => (v !== undefined ? `$${v.toFixed(2)}` : "N/A");
     const ema8Text = fmtEma(lastValid(data.ema8 || []));
     const ema21Text = fmtEma(lastValid(data.ema21 || []));
+    const ema50Text = fmtEma(lastValid(data.ema50 || []));
+    const ema200Text = fmtEma(lastValid(data.ema200 || []));
     const startText = data.intraday ? start.toLocaleString() : start.toLocaleDateString();
     const endText = data.intraday ? end.toLocaleString() : end.toLocaleDateString();
     const granularity = data.intraday ? "intraday" : "daily";
-    el.textContent = `${data.symbol.replace("^", "")} • ${startText} – ${endText} (${granularity}) • latest 8 EMA: ${ema8Text} • latest 21 EMA: ${ema21Text}`;
+    el.textContent = `${data.symbol.replace("^", "")} • ${startText} – ${endText} (${granularity}) • latest 8 EMA: ${ema8Text} • latest 21 EMA: ${ema21Text} • latest 50 EMA: ${ema50Text} • latest 200 EMA: ${ema200Text}`;
   }
 
   async function load(symbol, range) {
@@ -787,14 +822,17 @@ function createPriceChartController(ids) {
   }
 
   // A small floating label box that follows an anchor point but stays
-  // inside the plot bounds (flips to whichever side has room).
+  // inside the plot bounds (flips to whichever side has room). Each line
+  // is either a plain string (default text color) or {text, color} so the
+  // hover tooltip can color-code each indicator's value to match its line.
   function drawFollowingTooltip(anchorX, anchorY, lines) {
     const { padding, width } = state.layout;
     const ctx = state.overlayCtx;
     ctx.font = "11px -apple-system, Segoe UI, sans-serif";
     const lineHeight = 14;
     const pad = 6;
-    const boxW = Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
+    const textOf = (l) => (typeof l === "string" ? l : l.text);
+    const boxW = Math.max(...lines.map((l) => ctx.measureText(textOf(l)).width)) + pad * 2;
     const boxH = lines.length * lineHeight + pad * 2;
 
     let boxX = anchorX + 10;
@@ -811,14 +849,14 @@ function createPriceChartController(ids) {
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = "#e2e8f0";
     lines.forEach((line, i) => {
-      ctx.fillText(line, boxX + pad, boxY + pad + (i + 1) * lineHeight - 4);
+      ctx.fillStyle = typeof line === "string" ? "#e2e8f0" : line.color || "#e2e8f0";
+      ctx.fillText(textOf(line), boxX + pad, boxY + pad + (i + 1) * lineHeight - 4);
     });
   }
 
   function drawHoverCrosshair(index) {
-    if (!state.layout) return;
+    if (!state.layout || !state.data) return;
     const { padding, width, height, xAt, yAt, closes } = state.layout;
     const ctx = state.overlayCtx;
     ctx.clearRect(0, 0, width, height);
@@ -836,12 +874,32 @@ function createPriceChartController(ids) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.fillStyle = "#3b82f6";
+    ctx.fillStyle = INDICATOR_COLORS.price;
     ctx.beginPath();
     ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
-    drawFollowingTooltip(x, y, [formatChartPointDate(index), `$${price.toFixed(2)}`]);
+    const lines = [formatChartPointDate(index), { text: `Price: $${price.toFixed(2)}`, color: INDICATOR_COLORS.price }];
+    [
+      { key: "ema8", label: "8 EMA", values: state.data.ema8, color: INDICATOR_COLORS.ema8 },
+      { key: "ema", label: "21 EMA", values: state.data.ema21, color: INDICATOR_COLORS.ema21 },
+      { key: "ema50", label: "50 EMA", values: state.data.ema50, color: INDICATOR_COLORS.ema50 },
+      { key: "ema200", label: "200 EMA", values: state.data.ema200, color: INDICATOR_COLORS.ema200 },
+    ].forEach((s) => {
+      if (!state.toggles[s.key] || !s.values) return;
+      const v = s.values[index];
+      if (v === null || v === undefined) return;
+      lines.push({ text: `${s.label}: $${v.toFixed(2)}`, color: s.color });
+      // A small dot on each visible indicator's own line at this index,
+      // same idea as the price dot, so the tooltip values are traceable
+      // back to the actual line on the chart.
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(x, yAt(v), 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    drawFollowingTooltip(x, y, lines);
   }
 
   function drawDragSelection(startIndex, endIndex) {
@@ -997,6 +1055,8 @@ function createPriceChartController(ids) {
     };
     wire(ids.toggleEma8, "ema8", undefined, drawPrice);
     wire(ids.toggleEma, "ema", undefined, drawPrice);
+    wire(ids.toggleEma50, "ema50", undefined, drawPrice);
+    wire(ids.toggleEma200, "ema200", undefined, drawPrice);
     wire(ids.toggleRsi, "rsi", rsiPanel, drawRsi);
     wire(ids.toggleVolume, "volume", volumePanel, drawVolume);
   }
@@ -1039,6 +1099,8 @@ const primaryChart = createPriceChartController({
   rangeSelect: "range-select",
   toggleEma8: "toggle-ema8",
   toggleEma: "toggle-ema",
+  toggleEma50: "toggle-ema50",
+  toggleEma200: "toggle-ema200",
   toggleRsi: "toggle-rsi",
   toggleVolume: "toggle-volume",
   chartMeta: "chart-meta",
@@ -1131,6 +1193,8 @@ const comparisonChart = createPriceChartController({
   rangeSelect: "range-select-2",
   toggleEma8: "toggle2-ema8",
   toggleEma: "toggle2-ema",
+  toggleEma50: "toggle2-ema50",
+  toggleEma200: "toggle2-ema200",
   toggleRsi: "toggle2-rsi",
   toggleVolume: "toggle2-volume",
   chartMeta: "chart2-meta",
@@ -1254,6 +1318,14 @@ function renderCalendarHeatmap(container, data) {
     currentWeek.cells[rowIdx] = day;
   });
 
+  // Size cells so the same ~52 weeks stretch to fill the panel's actual
+  // width (no timeframe change, just bigger boxes) instead of a fixed
+  // small size that leaves whitespace on wide screens.
+  const gap = 3;
+  const availableWidth = container.getBoundingClientRect().width - 32; // .calendar-heatmap's own left+right padding
+  const cellSize = Math.max(10, Math.min(28, Math.floor((availableWidth - (weeks.length - 1) * gap) / weeks.length)));
+  const step = cellSize + gap;
+
   // Month labels row, aligned to the week columns.
   const monthLabels = document.createElement("div");
   monthLabels.className = "calendar-month-labels";
@@ -1263,7 +1335,7 @@ function renderCalendarHeatmap(container, data) {
     if (month !== lastMonth) {
       const label = document.createElement("span");
       label.style.position = "absolute";
-      label.style.left = `${i * 17}px`;
+      label.style.left = `${i * step}px`;
       label.textContent = week.firstDate.toLocaleDateString([], { month: "short" });
       monthLabels.appendChild(label);
       lastMonth = month;
@@ -1273,7 +1345,9 @@ function renderCalendarHeatmap(container, data) {
 
   const grid = document.createElement("div");
   grid.className = "calendar-grid";
-  grid.style.gridTemplateColumns = `repeat(${weeks.length}, 14px)`;
+  grid.style.gridTemplateColumns = `repeat(${weeks.length}, ${cellSize}px)`;
+  grid.style.gridTemplateRows = `repeat(5, ${cellSize}px)`;
+  grid.style.gap = `${gap}px`;
 
   // Cells with no trading data are either a real market holiday (falls
   // within the fetched date range) or just outside the range (the partial
@@ -1286,6 +1360,8 @@ function renderCalendarHeatmap(container, data) {
     const monday = parseISODateLocal(week.key);
     week.cells.forEach((day, rowIdx) => {
       const cell = document.createElement("div");
+      cell.style.width = `${cellSize}px`;
+      cell.style.height = `${cellSize}px`;
       if (day) {
         cell.className = "cal-cell";
         cell.style.background = heatColor(day.pct, 2.5);
@@ -1674,6 +1750,12 @@ function init() {
       const container = document.getElementById("constituents-heatmap");
       const metaEl = document.getElementById("constituents-meta");
       renderConstituentsHeatmap(container, metaEl, constituentsCache.get(primaryChart.state.symbol));
+    }
+    if (primaryChart.state.symbol) {
+      const cacheKey = `${primaryChart.state.symbol}:${CALENDAR_RANGE}`;
+      if (historyCache.has(cacheKey)) {
+        renderCalendarHeatmap(document.getElementById("calendar-heatmap"), historyCache.get(cacheKey));
+      }
     }
   });
   loadQuotes();

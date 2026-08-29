@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
@@ -38,19 +39,29 @@ CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 
-# Chart range presets. "ALL" is special-cased to use period1=0 instead of
-# range=max, since Yahoo silently coarsens range=max to ~monthly bars
-# regardless of the requested interval (see fetch_history_payload).
+# A 200-period EMA needs 200 real prior trading days to warm up -- a bare
+# "1mo"/"3mo"/etc request from Yahoo doesn't carry enough history for that,
+# so daily (non-intraday) ranges are fetched with this much extra calendar
+# padding before the display window, then trimmed back down after the EMAs
+# are computed over the full (padded) series. 340 calendar days clears 200
+# trading days comfortably even with holidays.
+EMA_WARMUP_DAYS = 340
+
+# Chart range presets. "display_days" (daily ranges only) is how much of
+# the fetched history is actually shown -- the rest is warmup padding for
+# slow-moving indicators (see fetch_history_payload). "ALL" is special-
+# cased to use period1=0 instead of range=max, since Yahoo silently
+# coarsens range=max to ~monthly bars regardless of the requested interval.
 RANGE_CONFIGS = {
     "1D": {"range": "1d", "interval": "2m", "intraday": True},
     "5D": {"range": "5d", "interval": "15m", "intraday": True},
-    "1M": {"range": "1mo", "interval": "1d"},
-    "3M": {"range": "3mo", "interval": "1d"},
-    "6M": {"range": "6mo", "interval": "1d"},
-    "YTD": {"range": "ytd", "interval": "1d"},
-    "1Y": {"range": "1y", "interval": "1d"},
-    "3Y": {"range": "3y", "interval": "1d"},
-    "5Y": {"range": "5y", "interval": "1d"},
+    "1M": {"interval": "1d", "display_days": 31},
+    "3M": {"interval": "1d", "display_days": 92},
+    "6M": {"interval": "1d", "display_days": 183},
+    "YTD": {"interval": "1d", "display_days": "ytd"},
+    "1Y": {"interval": "1d", "display_days": 366},
+    "3Y": {"interval": "1d", "display_days": 3 * 366},
+    "5Y": {"interval": "1d", "display_days": 5 * 366},
     "ALL": {"period0": True, "interval": "1d"},
 }
 DEFAULT_RANGE = "ALL"
@@ -374,22 +385,54 @@ def fetch_symbol_search(query):
 
 def fetch_history_payload(symbol, range_key):
     cfg = RANGE_CONFIGS.get(range_key, RANGE_CONFIGS[DEFAULT_RANGE])
+    cutoff_ts = None
+
     if cfg.get("period0"):
         # range=max silently gets coarsened by Yahoo to ~monthly bars for
         # old tickers regardless of the requested interval. Passing an
         # explicit period1=0 (auto-clipped to the real inception date)
         # instead keeps true daily resolution for the full history.
         params = {"interval": cfg["interval"], "period1": 0, "period2": int(time.time())}
-    else:
+    elif cfg.get("intraday"):
         params = {"interval": cfg["interval"], "range": cfg["range"]}
+    else:
+        display_days = cfg["display_days"]
+        if display_days == "ytd":
+            now_dt = datetime.now(timezone.utc)
+            display_days = (now_dt - datetime(now_dt.year, 1, 1, tzinfo=timezone.utc)).days + 1
+
+        period2 = int(time.time())
+        period1 = period2 - (display_days + EMA_WARMUP_DAYS) * 86400
+        cutoff_ts = period2 - display_days * 86400
+        params = {"interval": cfg["interval"], "period1": period1, "period2": period2}
 
     timestamps, closes, volumes = fetch_series(symbol, params)
     ema8 = compute_ema(closes, 8)
     ema21 = compute_ema(closes, 21)
+    ema50 = compute_ema(closes, 50)
+    ema200 = compute_ema(closes, 200)
     rsi14 = compute_rsi(closes, 14)
+
+    if cutoff_ts is not None:
+        # Indicators above were computed over the full padded series (so
+        # they're already warmed up); now trim back down to just the
+        # requested display window.
+        keep_from = next((i for i, t in enumerate(timestamps) if t >= cutoff_ts), None)
+        if keep_from is not None and keep_from > 0:
+            timestamps = timestamps[keep_from:]
+            closes = closes[keep_from:]
+            volumes = volumes[keep_from:]
+            ema8 = ema8[keep_from:]
+            ema21 = ema21[keep_from:]
+            ema50 = ema50[keep_from:]
+            ema200 = ema200[keep_from:]
+            rsi14 = rsi14[keep_from:]
+
     closes = [round(c, 4) for c in closes]
     ema8 = [round(v, 4) if v is not None else None for v in ema8]
     ema21 = [round(v, 4) if v is not None else None for v in ema21]
+    ema50 = [round(v, 4) if v is not None else None for v in ema50]
+    ema200 = [round(v, 4) if v is not None else None for v in ema200]
     rsi14 = [round(v, 4) if v is not None else None for v in rsi14]
     volumes = [v if v is not None else None for v in volumes]
     return {
@@ -400,6 +443,8 @@ def fetch_history_payload(symbol, range_key):
         "closes": closes,
         "ema8": ema8,
         "ema21": ema21,
+        "ema50": ema50,
+        "ema200": ema200,
         "rsi14": rsi14,
         "volumes": volumes,
     }
