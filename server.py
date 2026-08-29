@@ -456,20 +456,48 @@ def fetch_history_payload(symbol, range_key):
 
 
 class Cache:
+    """TTL cache that serves the last-known-good value immediately once
+    it has one, refreshing in a background thread rather than blocking
+    the caller -- Yahoo's endpoints have occasionally gone slow/unresponsive
+    enough from this host's IP that a request-blocking refresh could hang
+    an HTTP request for minutes. Only the very first load (no data yet)
+    blocks, since there's nothing to serve in the meantime."""
+
     def __init__(self, ttl, loader):
         self._ttl = ttl
         self._loader = loader
         self._data = None
         self._ts = 0.0
         self._lock = threading.Lock()
+        self._refreshing = False
 
     def get(self):
         with self._lock:
             now = time.time()
-            if self._data is None or (now - self._ts) > self._ttl:
+            is_stale = self._data is None or (now - self._ts) > self._ttl
+            if not is_stale or self._refreshing:
+                return self._data
+            if self._data is None:
+                # Nothing to serve yet -- this first load has to block.
                 self._data = self._loader()
-                self._ts = now
-            return self._data
+                self._ts = time.time()
+                return self._data
+            self._refreshing = True
+
+        def _do_refresh():
+            try:
+                data = self._loader()
+                with self._lock:
+                    self._data = data
+                    self._ts = time.time()
+            except Exception:  # noqa: BLE001
+                pass  # keep serving the last-known-good data; try again next call
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        threading.Thread(target=_do_refresh, daemon=True).start()
+        return self._data
 
 
 price_cache = Cache(PRICE_TTL_SECONDS, fetch_all_prices)
