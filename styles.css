@@ -371,6 +371,7 @@ body {
   top: 0;
   left: 0;
   cursor: crosshair;
+  touch-action: none;
 }
 
 .chart-hint {
@@ -790,6 +791,22 @@ table.ticker-table {
   .chart-panel-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  /* A panel-header title + its trailing control (ticker select, window
+     buttons, calendar label) squeeze together on a narrow screen since
+     the control keeps its margin-left:auto place on the same line as a
+     now-wrapping multi-line title -- drop the control to its own
+     full-width line instead. */
+  .panel-header {
+    flex-wrap: wrap;
+  }
+
+  .panel-header .constituents-ticker-select,
+  .panel-header .timeseries-window-select,
+  .panel-header .calendar-ticker-label {
+    margin-left: 0;
+    width: 100%;
   }
 }
 

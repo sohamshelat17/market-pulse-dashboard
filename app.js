@@ -978,21 +978,21 @@ function createPriceChartController(ids) {
     const overlay = document.getElementById(ids.overlayCanvas);
     if (!overlay) return;
 
-    const mouseXFromEvent = (e) => {
+    const xFromClientX = (clientX) => {
       const rect = overlay.getBoundingClientRect();
-      return e.clientX - rect.left;
+      return clientX - rect.left;
     };
 
     overlay.addEventListener("mousedown", (e) => {
       if (!state.layout) return;
-      const idx = indexFromMouseX(mouseXFromEvent(e));
+      const idx = indexFromMouseX(xFromClientX(e.clientX));
       state.dragState = { startIndex: idx, endIndex: idx, active: true };
       drawDragSelection(idx, idx);
     });
 
     overlay.addEventListener("mousemove", (e) => {
       if (!state.layout || !state.overlayCtx) return;
-      const idx = indexFromMouseX(mouseXFromEvent(e));
+      const idx = indexFromMouseX(xFromClientX(e.clientX));
       if (state.dragState && state.dragState.active) {
         state.dragState.endIndex = idx;
         drawDragSelection(state.dragState.startIndex, state.dragState.endIndex);
@@ -1018,6 +1018,58 @@ function createPriceChartController(ids) {
         state.overlayCtx.clearRect(0, 0, state.layout.width, state.layout.height);
       }
     });
+
+    // Touch support -- iOS/mobile has no mouse events at all, so without
+    // this the hover-price and drag-to-measure features are simply dead
+    // on a phone. A touch has no "hovering before you press" state the
+    // way a mouse does, so touchstart itself doubles as the hover trigger
+    // (immediate price/indicator readout); only a real drag afterward
+    // promotes it into the same measurement mode a mouse-drag produces.
+    // preventDefault (and { passive: false }, required for it to take
+    // effect) stops the gesture from also scrolling/zooming the page.
+    let touchCandidateIndex = null;
+
+    overlay.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 1 || !state.layout) return;
+        e.preventDefault();
+        state.dragState = null; // a new touch always replaces any frozen measurement
+        const idx = indexFromMouseX(xFromClientX(e.touches[0].clientX));
+        touchCandidateIndex = idx;
+        drawHoverCrosshair(idx);
+      },
+      { passive: false }
+    );
+
+    overlay.addEventListener(
+      "touchmove",
+      (e) => {
+        if (e.touches.length !== 1 || !state.layout || touchCandidateIndex === null) return;
+        e.preventDefault();
+        const idx = indexFromMouseX(xFromClientX(e.touches[0].clientX));
+        if (!state.dragState) {
+          state.dragState = { startIndex: touchCandidateIndex, endIndex: idx, active: true };
+        } else {
+          state.dragState.endIndex = idx;
+        }
+        drawDragSelection(state.dragState.startIndex, state.dragState.endIndex);
+      },
+      { passive: false }
+    );
+
+    const endTouch = (e) => {
+      if (touchCandidateIndex === null) return;
+      e.preventDefault();
+      if (state.dragState) {
+        state.dragState.active = false; // freeze the measurement, same as a mouse drag release
+      } else if (state.overlayCtx && state.layout) {
+        state.overlayCtx.clearRect(0, 0, state.layout.width, state.layout.height); // just a tap -- clear the crosshair
+      }
+      touchCandidateIndex = null;
+    };
+    overlay.addEventListener("touchend", endTouch);
+    overlay.addEventListener("touchcancel", endTouch);
   }
 
   function initRangeButtons() {
