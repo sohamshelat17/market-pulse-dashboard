@@ -17,7 +17,6 @@ from constituents import fetch_price_simple
 # by weight, but are listed here as the two real, separately-priced tickers
 # they actually are, kept adjacent to preserve that combined rank.
 WATCHLIST_TICKERS = [
-    {"symbol": "CASH", "name": "Cash & Money Market"},
     {"symbol": "AMZN", "name": "Amazon.com"},
     {"symbol": "AVGO", "name": "Broadcom"},
     {"symbol": "GOOGL", "name": "Alphabet Cl A"},
