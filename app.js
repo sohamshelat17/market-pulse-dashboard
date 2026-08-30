@@ -234,88 +234,6 @@ function renderOverviewHeatmap(groups) {
 }
 
 // ---------------------------------------------------------------------------
-// Options issuance tracker -- reads a file refresh_options.py pre-computes
-// (a full sweep is too slow to run inline; see server.py's
-// /api/options/issuance route and options_issuance.py's module docstring)
-// ---------------------------------------------------------------------------
-
-function daysOut(dateStr) {
-  if (!dateStr) return null;
-  const target = new Date(`${dateStr}T00:00:00`);
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  return Math.round((target - now) / 86400000);
-}
-
-function renderOptionsRows(tbodyId, rows, columns) {
-  const tbody = document.getElementById(tbodyId);
-  tbody.innerHTML = "";
-  rows.forEach((row) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = columns.map((col) => `<td>${col(row)}</td>`).join("");
-    tbody.appendChild(tr);
-  });
-}
-
-function setOptionsStatus(elId, message) {
-  const el = document.getElementById(elId);
-  if (message) {
-    el.textContent = message;
-    el.hidden = false;
-  } else {
-    el.hidden = true;
-  }
-}
-
-async function loadOptionsIssuance() {
-  const refreshBtn = document.getElementById("options-refresh-btn");
-  refreshBtn.disabled = true;
-  try {
-    const res = await fetch("/api/options/issuance", { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-
-    if (!data.available) {
-      setOptionsStatus("options-status-predicted", data.error || "No data yet.");
-      setOptionsStatus("options-status-confirmed", data.error || "No data yet.");
-      document.getElementById("options-updated-at").textContent = "No data yet";
-      renderOptionsRows("options-predicted-body", [], []);
-      renderOptionsRows("options-confirmed-body", [], []);
-      return;
-    }
-
-    const staleNote = data.stale ? " (stale -- run refresh_options.py again)" : "";
-    document.getElementById("options-updated-at").textContent =
-      `As of ${data.asOf}, generated ${new Date(data.generatedAt).toLocaleString()}${staleNote}`;
-
-    setOptionsStatus("options-status-predicted", data.nextBusinessDay.length ? null : "No predicted listings for the next business day.");
-    renderOptionsRows("options-predicted-body", data.nextBusinessDay, [
-      (r) => `<span class="ticker-badge">${r.symbol}</span>`,
-      (r) => r.name,
-      (r) => r.expirationDate || "—",
-      (r) => (r.expirationDate ? daysOut(r.expirationDate) : "—"),
-      (r) => (r.note ? `<span title="${r.note}">${r.basis}</span>` : r.basis),
-    ]);
-
-    const confirmedNote = data.meta.diffSkipped
-      ? "No baseline snapshot yet -- run refresh_options.py again tomorrow to start seeing confirmed new listings here."
-      : (data.listedToday.length ? null : "No new call series confirmed today.");
-    setOptionsStatus("options-status-confirmed", confirmedNote);
-    renderOptionsRows("options-confirmed-body", data.listedToday, [
-      (r) => `<span class="ticker-badge">${r.symbol}</span>`,
-      (r) => r.name,
-      (r) => r.expirationDate,
-      (r) => r.basis,
-    ]);
-  } catch (err) {
-    setOptionsStatus("options-status-predicted", `Failed to load: ${err.message}`);
-    setOptionsStatus("options-status-confirmed", `Failed to load: ${err.message}`);
-  } finally {
-    refreshBtn.disabled = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Watchlist heatmap (separate ticker list, not part of the tracked ETFs --
 // no click-to-select since these aren't valid chart/history symbols here)
 // ---------------------------------------------------------------------------
@@ -1873,7 +1791,6 @@ function init() {
   initTimeseriesWindowButtons();
   initNewsTab();
   document.getElementById("refresh-btn").addEventListener("click", loadQuotes);
-  document.getElementById("options-refresh-btn").addEventListener("click", loadOptionsIssuance);
   TICKER_SELECT_IDS.forEach((id) => {
     const select = document.getElementById(id);
     if (select) select.addEventListener("change", (e) => selectPrimaryTicker(e.target.value, { scroll: false }));
@@ -1895,7 +1812,6 @@ function init() {
   });
   loadQuotes();
   loadWatchlist();
-  loadOptionsIssuance();
   setInterval(loadQuotes, REFRESH_INTERVAL_MS);
   setInterval(loadWatchlist, REFRESH_INTERVAL_MS);
 }

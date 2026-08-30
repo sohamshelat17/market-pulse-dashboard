@@ -1,8 +1,3 @@
 __pycache__/
 *.pyc
-
-# data/ used to be gitignored (local-only cache), but the GitHub Actions
-# workflow that runs the daily sweep needs it committed: it's how the
-# refreshed data actually reaches the live Render deployment, and how each
-# day's run gets yesterday's snapshot for the "listed today" diff.
-data/logs/
+data/

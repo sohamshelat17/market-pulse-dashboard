@@ -25,7 +25,6 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 import constituents
 import news
 import watchlist
-from options_issuance import OUTPUT_PATH as OPTIONS_ISSUANCE_PATH
 
 PORT = 8787
 PRICE_TTL_SECONDS = 15
@@ -34,7 +33,6 @@ HISTORY_TTL_SECONDS = 3600
 INTRADAY_HISTORY_TTL_SECONDS = 60
 CONSTITUENTS_TTL_SECONDS = 300
 NEWS_TTL_SECONDS = 1800
-OPTIONS_ISSUANCE_STALE_SECONDS = 36 * 3600  # flag as stale if refresh_options.py hasn't run in this long
 REQUEST_TIMEOUT = 8
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -653,8 +651,6 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_news_feed()
         elif parsed.path == "/api/symbol-search":
             self._handle_symbol_search(parse_qs(parsed.query))
-        elif parsed.path == "/api/options/issuance":
-            self._handle_options_issuance()
         else:
             self._serve_static(parsed.path)
 
@@ -689,28 +685,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return
-        self._send_json(data)
-
-    def _handle_options_issuance(self):
-        # Reads the file refresh_options.py writes -- deliberately no live
-        # fetching here, since a full sweep takes ~100 min on the free tier
-        # and would block/starve this request-serving process.
-        if not os.path.isfile(OPTIONS_ISSUANCE_PATH):
-            self._send_json({
-                "available": False,
-                "error": "No data yet -- run `python refresh_options.py` to populate this.",
-            }, status=200)
-            return
-        try:
-            with open(OPTIONS_ISSUANCE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            self._send_json({"available": False, "error": str(exc)}, status=502)
-            return
-
-        age_seconds = time.time() - os.path.getmtime(OPTIONS_ISSUANCE_PATH)
-        data["available"] = True
-        data["stale"] = age_seconds > OPTIONS_ISSUANCE_STALE_SECONDS
         self._send_json(data)
 
     def _handle_symbol_search(self, query):
