@@ -1,0 +1,21 @@
+{
+  "asOf": "2026-08-29",
+  "generatedAt": "2026-08-29T22:19:53",
+  "nextBusinessDay": [
+    {
+      "symbol": "ACGL",
+      "name": "Arch Capital Group",
+      "expirationDate": null,
+      "basis": "LEAPS (heuristic)",
+      "confidence": "low",
+      "note": "No long-dated expiration currently listed -- a new LEAPS cycle may be added soon, but the exact day isn't reliably predictable."
+    }
+  ],
+  "listedToday": [],
+  "meta": {
+    "tickersCovered": 10,
+    "tickersFailed": [],
+    "diffBaseline": null,
+    "diffSkipped": true
+  }
+}

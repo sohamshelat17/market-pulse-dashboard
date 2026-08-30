@@ -22,6 +22,7 @@
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="market-pulse" role="tab" aria-selected="true">Market Pulse</button>
       <button class="tab" data-tab="relevant-news" role="tab" aria-selected="false">Relevant News</button>
+      <button class="tab" data-tab="options" role="tab" aria-selected="false">Options</button>
     </div>
   </header>
 
@@ -221,6 +222,56 @@
 
       <div id="news-feed" class="news-feed">
         <div class="chart-status static">Loading recent news across your watchlist…</div>
+      </div>
+    </section>
+
+    <section id="options" class="tab-panel">
+      <div class="panel-toolbar">
+        <span id="options-updated-at" class="updated-at">Loading…</span>
+        <button id="options-refresh-btn" class="refresh-btn">Refresh</button>
+      </div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--blue)"></span>
+          Listing next business day (predicted)
+        </div>
+        <div id="options-status-predicted" class="chart-status static" hidden></div>
+        <div class="table-wrap">
+          <table class="ticker-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Name</th>
+                <th>New expiration</th>
+                <th>Days out</th>
+                <th>Basis</th>
+              </tr>
+            </thead>
+            <tbody id="options-predicted-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          Listed today (confirmed)
+        </div>
+        <div id="options-status-confirmed" class="chart-status static" hidden></div>
+        <div class="table-wrap">
+          <table class="ticker-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Name</th>
+                <th>New expiration</th>
+                <th>Basis</th>
+              </tr>
+            </thead>
+            <tbody id="options-confirmed-body"></tbody>
+          </table>
+        </div>
       </div>
     </section>
   </main>

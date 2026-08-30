@@ -1,0 +1,45 @@
+name: Refresh options issuance data
+
+# Runs the full ~940-ticker options-issuance sweep on GitHub's infrastructure
+# (free for public repos, regardless of job duration) and commits the
+# refreshed data back to the repo. That push is what actually updates the
+# live Render deployment -- Render serves data/options_issuance.json
+# straight off disk, so a fresh commit + auto-deploy is how "today's data"
+# reaches the live site (Render's free tier can't run a multi-hour job
+# itself: it sleeps when idle and has no persistent disk).
+
+on:
+  schedule:
+    # 08:00 UTC ~= 4:00am US Eastern during EDT (summer), ~3:00am during EST
+    # (winter) -- either way it's comfortably done well before a 9:30am ET
+    # market open across the whole year, so this isn't adjusted for DST.
+    - cron: "0 8 * * 1-5"
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300 # full sweep is ~3-3.5 hrs; generous buffer above that
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run options-issuance sweep
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: python refresh_options.py
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "Automated options-issuance refresh"
+          git push
