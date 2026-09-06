@@ -524,7 +524,7 @@ function createPriceChartController(ids) {
     layout: null,
     overlayCtx: null,
     dragState: null, // null | {startIndex, endIndex, active}
-    toggles: { ema8: true, ema: true, ema50: false, ema200: false, sma200: false, rsi: false, volume: true },
+    toggles: { ema8: false, ema: false, ema50: false, ema200: false, sma200: false, rsi: false, volume: true },
   };
 
   function sizeOverlayCanvasToMatch(width, height) {
