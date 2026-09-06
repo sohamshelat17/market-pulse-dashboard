@@ -216,6 +216,18 @@ def compute_ema(values, period):
     return ema
 
 
+def compute_sma(values, period):
+    sma = [None] * len(values)
+    if len(values) < period:
+        return sma
+    window_sum = sum(values[:period])
+    sma[period - 1] = window_sum / period
+    for i in range(period, len(values)):
+        window_sum += values[i] - values[i - period]
+        sma[i] = window_sum / period
+    return sma
+
+
 def compute_rsi(values, period=14):
     n = len(values)
     rsi = [None] * n
@@ -411,6 +423,7 @@ def fetch_history_payload(symbol, range_key):
     ema21 = compute_ema(closes, 21)
     ema50 = compute_ema(closes, 50)
     ema200 = compute_ema(closes, 200)
+    sma200 = compute_sma(closes, 200)
     rsi14 = compute_rsi(closes, 14)
 
     if cutoff_ts is not None:
@@ -426,6 +439,7 @@ def fetch_history_payload(symbol, range_key):
             ema21 = ema21[keep_from:]
             ema50 = ema50[keep_from:]
             ema200 = ema200[keep_from:]
+            sma200 = sma200[keep_from:]
             rsi14 = rsi14[keep_from:]
 
     closes = [round(c, 4) for c in closes]
@@ -433,6 +447,7 @@ def fetch_history_payload(symbol, range_key):
     ema21 = [round(v, 4) if v is not None else None for v in ema21]
     ema50 = [round(v, 4) if v is not None else None for v in ema50]
     ema200 = [round(v, 4) if v is not None else None for v in ema200]
+    sma200 = [round(v, 4) if v is not None else None for v in sma200]
     rsi14 = [round(v, 4) if v is not None else None for v in rsi14]
     volumes = [v if v is not None else None for v in volumes]
     return {
@@ -445,6 +460,7 @@ def fetch_history_payload(symbol, range_key):
         "ema21": ema21,
         "ema50": ema50,
         "ema200": ema200,
+        "sma200": sma200,
         "rsi14": rsi14,
         "volumes": volumes,
     }

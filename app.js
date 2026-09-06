@@ -470,6 +470,7 @@ const INDICATOR_COLORS = {
   ema21: "#f59e0b",
   ema50: "#ec4899",
   ema200: "#a3e635",
+  sma200: "#14b8a6",
 };
 
 function formatAxisLabel(date, range) {
@@ -522,7 +523,7 @@ function createPriceChartController(ids) {
     layout: null,
     overlayCtx: null,
     dragState: null, // null | {startIndex, endIndex, active}
-    toggles: { ema8: true, ema: true, ema50: false, ema200: false, rsi: false, volume: true },
+    toggles: { ema8: true, ema: true, ema50: false, ema200: false, sma200: false, rsi: false, volume: true },
   };
 
   function sizeOverlayCanvasToMatch(width, height) {
@@ -544,7 +545,7 @@ function createPriceChartController(ids) {
     const height = 260;
     const { ctx, width } = setupCanvas(canvas, height);
 
-    const { closes, ema8, ema21, ema50, ema200, timestamps, range } = data;
+    const { closes, ema8, ema21, ema50, ema200, sma200, timestamps, range } = data;
     if (!closes || closes.length < 2) {
       state.layout = null;
       return;
@@ -559,6 +560,7 @@ function createPriceChartController(ids) {
       { key: "ema", values: ema21, color: INDICATOR_COLORS.ema21 },
       { key: "ema50", values: ema50, color: INDICATOR_COLORS.ema50 },
       { key: "ema200", values: ema200, color: INDICATOR_COLORS.ema200 },
+      { key: "sma200", values: sma200, color: INDICATOR_COLORS.sma200 },
     ];
     const visibleEmaValues = emaSeries
       .filter((s) => state.toggles[s.key] && s.values)
@@ -714,10 +716,11 @@ function createPriceChartController(ids) {
     const ema21Text = fmtEma(lastValid(data.ema21 || []));
     const ema50Text = fmtEma(lastValid(data.ema50 || []));
     const ema200Text = fmtEma(lastValid(data.ema200 || []));
+    const sma200Text = fmtEma(lastValid(data.sma200 || []));
     const startText = data.intraday ? start.toLocaleString() : start.toLocaleDateString();
     const endText = data.intraday ? end.toLocaleString() : end.toLocaleDateString();
     const granularity = data.intraday ? "intraday" : "daily";
-    el.textContent = `${data.symbol.replace("^", "")} • ${startText} – ${endText} (${granularity}) • latest 8 EMA: ${ema8Text} • latest 21 EMA: ${ema21Text} • latest 50 EMA: ${ema50Text} • latest 200 EMA: ${ema200Text}`;
+    el.textContent = `${data.symbol.replace("^", "")} • ${startText} – ${endText} (${granularity}) • latest 8 EMA: ${ema8Text} • latest 21 EMA: ${ema21Text} • latest 50 EMA: ${ema50Text} • latest 200 EMA: ${ema200Text} • latest 200 SMA: ${sma200Text}`;
   }
 
   async function load(symbol, range) {
@@ -885,6 +888,7 @@ function createPriceChartController(ids) {
       { key: "ema", label: "21 EMA", values: state.data.ema21, color: INDICATOR_COLORS.ema21 },
       { key: "ema50", label: "50 EMA", values: state.data.ema50, color: INDICATOR_COLORS.ema50 },
       { key: "ema200", label: "200 EMA", values: state.data.ema200, color: INDICATOR_COLORS.ema200 },
+      { key: "sma200", label: "200 SMA", values: state.data.sma200, color: INDICATOR_COLORS.sma200 },
     ].forEach((s) => {
       if (!state.toggles[s.key] || !s.values) return;
       const v = s.values[index];
@@ -1109,6 +1113,7 @@ function createPriceChartController(ids) {
     wire(ids.toggleEma, "ema", undefined, drawPrice);
     wire(ids.toggleEma50, "ema50", undefined, drawPrice);
     wire(ids.toggleEma200, "ema200", undefined, drawPrice);
+    wire(ids.toggleSma200, "sma200", undefined, drawPrice);
     wire(ids.toggleRsi, "rsi", rsiPanel, drawRsi);
     wire(ids.toggleVolume, "volume", volumePanel, drawVolume);
   }
@@ -1153,6 +1158,7 @@ const primaryChart = createPriceChartController({
   toggleEma: "toggle-ema",
   toggleEma50: "toggle-ema50",
   toggleEma200: "toggle-ema200",
+  toggleSma200: "toggle-sma200",
   toggleRsi: "toggle-rsi",
   toggleVolume: "toggle-volume",
   chartMeta: "chart-meta",
@@ -1247,6 +1253,7 @@ const comparisonChart = createPriceChartController({
   toggleEma: "toggle2-ema",
   toggleEma50: "toggle2-ema50",
   toggleEma200: "toggle2-ema200",
+  toggleSma200: "toggle2-sma200",
   toggleRsi: "toggle2-rsi",
   toggleVolume: "toggle2-volume",
   chartMeta: "chart2-meta",

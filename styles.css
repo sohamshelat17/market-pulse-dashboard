@@ -258,6 +258,7 @@ body {
 .swatch.ema { background: #f59e0b; }
 .swatch.ema50 { background: #ec4899; }
 .swatch.ema200 { background: #a3e635; }
+.swatch.sma200 { background: #14b8a6; }
 .swatch.rsi { background: var(--violet); }
 .swatch.volume { background: #64748b; }
 
