@@ -267,6 +267,7 @@ function renderWatchlistHeatmap(tickers) {
       <span class="heat-price">${priceText}</span>
       <span class="heat-pct">${pctText}</span>
     `;
+    cell.addEventListener("click", () => selectComparisonTicker(ticker.rawSymbol));
     container.appendChild(cell);
   });
 }
@@ -1317,6 +1318,16 @@ function selectPrimaryTicker(symbol, { scroll = true } = {}) {
   loadConstituentsHeatmap(symbol);
 }
 
+// Loads a ticker into the independent "Stock chart" instead of the primary
+// chart/calendar/constituents cascade -- used by tiles that represent an
+// individual stock rather than a tracked ETF (constituents holdings,
+// watchlist names), where jumping the *primary* selection would be
+// surprising since those aren't part of the tracked-ETF list.
+function selectComparisonTicker(symbol) {
+  comparisonChart.selectTicker(symbol);
+  document.getElementById("stock-chart-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 // ---------------------------------------------------------------------------
 // Daily calendar heatmap (per-ticker, GitHub-style, ~1 year of trading days)
 // ---------------------------------------------------------------------------
@@ -1587,6 +1598,7 @@ function renderConstituentsHeatmap(container, metaEl, data) {
       `;
     }
 
+    div.addEventListener("click", () => selectComparisonTicker(t.symbol));
     container.appendChild(div);
   });
 }

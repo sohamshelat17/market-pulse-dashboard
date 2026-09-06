@@ -533,6 +533,7 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  cursor: pointer;
 }
 
 .tile .tile-symbol {
