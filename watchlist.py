@@ -9,7 +9,7 @@ themselves aren't tracked in code and never appear anywhere in the app."""
 
 from concurrent.futures import ThreadPoolExecutor
 
-from constituents import fetch_price_simple
+from constituents import fetch_all_time_high, fetch_price_simple
 
 # "label" is the conventional display form where it differs from the symbol
 # Yahoo actually needs (BRK.B -> BRK-B), same pattern as "^VIX" elsewhere.
@@ -95,7 +95,9 @@ WATCHLIST_TICKERS = [
 ]
 
 
-def fetch_watchlist_payload():
+def fetch_watchlist_prices():
+    """Today's price + change% for every watchlist ticker -- cheap, so
+    refreshed frequently (see server.py's short-TTL cache for this)."""
     results = {}
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {pool.submit(fetch_price_simple, t["symbol"]): t["symbol"] for t in WATCHLIST_TICKERS}
@@ -104,12 +106,42 @@ def fetch_watchlist_payload():
                 results[symbol] = future.result()
             except Exception:
                 results[symbol] = None
+    return results
 
+
+def fetch_watchlist_aths():
+    """All-time-high price per ticker, for the %-off-high stat. A full
+    price-history fetch per ticker is much heavier than the plain price
+    fetch above, but an all-time high is also extremely stable -- it only
+    moves on the rare day a ticker actually sets a new one -- so this is
+    cached far longer (see server.py) rather than refetched on every poll."""
+    results = {}
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {pool.submit(fetch_all_time_high, t["symbol"]): t["symbol"] for t in WATCHLIST_TICKERS}
+        for future, symbol in futures.items():
+            try:
+                results[symbol] = future.result()
+            except Exception:
+                results[symbol] = None
+    return results
+
+
+def build_watchlist_response(prices, aths):
     tickers_out = []
     for t in WATCHLIST_TICKERS:
-        r = results.get(t["symbol"])
+        r = prices.get(t["symbol"])
         price = r.get("price") if r else None
         change_percent = r.get("changePercent") if r else None
+
+        ath = aths.get(t["symbol"])
+        drawdown_percent = None
+        if price is not None and ath:
+            # Clamp negative (price nosed past a since-stale cached ATH
+            # intraday) to 0 -- "at a new high" reads better than a
+            # confusing negative drawdown, and the cache catches up on its
+            # own next refresh.
+            drawdown_percent = max(0.0, ((ath - price) / ath) * 100)
+
         tickers_out.append(
             {
                 "symbol": t.get("label", t["symbol"]),
@@ -117,6 +149,7 @@ def fetch_watchlist_payload():
                 "name": t["name"],
                 "price": round(price, 2) if price is not None else None,
                 "changePercent": round(change_percent, 4) if change_percent is not None else None,
+                "drawdownPercent": round(drawdown_percent, 2) if drawdown_percent is not None else None,
             }
         )
     return {"tickers": tickers_out}

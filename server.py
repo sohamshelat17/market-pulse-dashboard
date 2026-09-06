@@ -33,6 +33,7 @@ HISTORY_TTL_SECONDS = 3600
 INTRADAY_HISTORY_TTL_SECONDS = 60
 CONSTITUENTS_TTL_SECONDS = 300
 NEWS_TTL_SECONDS = 1800
+ATH_TTL_SECONDS = 6 * 3600  # all-time highs barely ever change intraday
 REQUEST_TIMEOUT = 8
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -518,7 +519,8 @@ class Cache:
 
 price_cache = Cache(PRICE_TTL_SECONDS, fetch_all_prices)
 stats_cache = Cache(STATS_TTL_SECONDS, fetch_all_stats)
-watchlist_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_payload)
+watchlist_price_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_prices)
+watchlist_ath_cache = Cache(ATH_TTL_SECONDS, watchlist.fetch_watchlist_aths)
 
 _history_cache = {}
 _history_lock = threading.Lock()
@@ -680,7 +682,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_watchlist(self):
         try:
-            data = watchlist_cache.get()
+            prices = watchlist_price_cache.get()
+            aths = watchlist_ath_cache.get()
+            data = watchlist.build_watchlist_response(prices, aths)
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return

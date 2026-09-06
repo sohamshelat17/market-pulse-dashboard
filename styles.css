@@ -456,6 +456,11 @@ body {
   color: #f8fafc;
 }
 
+.heat-cell .heat-drawdown {
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .calendar-heatmap {
   padding: 14px 16px 18px;
   overflow-x: auto;

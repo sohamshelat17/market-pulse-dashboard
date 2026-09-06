@@ -81,6 +81,25 @@ function heatColor(pct, cap = 3) {
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
+// "% off all-time high" -- current price vs. the highest price the
+// ticker has ever traded at (e.g. trading at 50 vs. a 100 all-time high
+// is a 50% drawdown). Unlike heatColor this is one-sided (0%..~100%+),
+// so it gets its own text-color ramp: pale/neutral near a new high,
+// deepening to red the further underwater a name is.
+function drawdownTextColor(pct) {
+  if (pct === null || pct === undefined) return "rgba(226, 232, 240, 0.55)";
+  const t = Math.min(1, pct / 60); // treat 60%+ as "maximally" deep
+  const saturation = 15 + t * 65;
+  const lightness = 68 - t * 22;
+  return `hsl(0, ${saturation}%, ${lightness}%)`;
+}
+
+function fmtDrawdown(pct) {
+  if (pct === null || pct === undefined) return "N/A";
+  if (pct < 0.05) return "At all-time high";
+  return `${pct.toFixed(1)}% off high`;
+}
+
 function dateOnly(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
@@ -260,12 +279,14 @@ function renderWatchlistHeatmap(tickers) {
     cell.style.background = heatColor(ticker.changePercent);
     const priceText = ticker.price == null ? "N/A" : fmtPrice(ticker.price);
     const pctText = ticker.changePercent == null ? "N/A" : fmtPercent(ticker.changePercent);
-    cell.title = `${ticker.symbol} — ${ticker.name}: ${priceText} (${pctText})`;
+    const drawdownText = fmtDrawdown(ticker.drawdownPercent);
+    cell.title = `${ticker.symbol} — ${ticker.name}: ${priceText} (${pctText}) • ${drawdownText}`;
     cell.innerHTML = `
       <span class="heat-symbol">${ticker.symbol}</span>
       <span class="heat-name">${ticker.name}</span>
       <span class="heat-price">${priceText}</span>
       <span class="heat-pct">${pctText}</span>
+      <span class="heat-drawdown" style="color: ${drawdownTextColor(ticker.drawdownPercent)}">${drawdownText}</span>
     `;
     cell.addEventListener("click", () => selectComparisonTicker(ticker.rawSymbol));
     container.appendChild(cell);

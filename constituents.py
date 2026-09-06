@@ -119,6 +119,29 @@ def fetch_price_simple(symbol):
     return {"price": price, "changePercent": change_percent}
 
 
+def fetch_all_time_high(symbol):
+    """All-time-high price (based on daily highs, not just closes), for the
+    watchlist's %-off-high stat. Uses an explicit period1=0, like the
+    price chart's "ALL" range, rather than range=max -- Yahoo silently
+    coarsens range=max to ~monthly bars regardless of the requested
+    interval, which would understate the true intraday high."""
+    from urllib.parse import quote
+
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}"
+        f"?interval=1d&period1=0&period2={int(time.time())}"
+    )
+    req = Request(url, headers=HEADERS)
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        payload = json.load(resp)
+    quote_data = payload["chart"]["result"][0]["indicators"]["quote"][0]
+    highs = [h for h in quote_data.get("high", []) if h is not None]
+    if highs:
+        return max(highs)
+    closes = [c for c in quote_data.get("close", []) if c is not None]
+    return max(closes) if closes else None
+
+
 # ---------------------------------------------------------------------------
 # State Street / SPDR -- public XLSX
 # ---------------------------------------------------------------------------
