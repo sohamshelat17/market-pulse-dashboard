@@ -458,7 +458,12 @@ body {
 
 .heat-cell .heat-drawdown {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
+  /* Fixed near-white, not red/green -- this tile's own background is
+     already red or green (today's change%), so colored text here would
+     clash and lose legibility exactly on the backgrounds it needs to
+     read against. Matches .heat-symbol/.heat-pct's same treatment. */
+  color: #f8fafc;
 }
 
 .calendar-heatmap {

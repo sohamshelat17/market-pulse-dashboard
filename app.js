@@ -86,17 +86,6 @@ function heatColor(pct, cap = 3) {
 // is a 50% drawdown). Unlike heatColor this is one-sided (0%..~100%+),
 // so it gets its own text-color ramp: pale/neutral near a new high,
 // deepening to red the further underwater a name is.
-// Bold, unambiguous red/green rather than a subtle gradient -- positive
-// means a real drawdown (price below the all-time high), negative means
-// the price is currently *above* the last known high (a fresh breakout,
-// or the ATH cache just hasn't caught up yet). Matches the same red/green
-// used for "up"/"down" everywhere else in the app.
-function drawdownTextColor(pct) {
-  if (pct === null || pct === undefined) return "rgba(226, 232, 240, 0.55)";
-  if (Math.abs(pct) < 0.05) return "var(--green)";
-  return pct > 0 ? "var(--red)" : "var(--green)";
-}
-
 function fmtDrawdown(pct) {
   if (pct === null || pct === undefined) return "N/A";
   if (Math.abs(pct) < 0.05) return "At all-time high";
@@ -290,7 +279,7 @@ function renderWatchlistHeatmap(tickers) {
       <span class="heat-name">${ticker.name}</span>
       <span class="heat-price">${priceText}</span>
       <span class="heat-pct">${pctText}</span>
-      <span class="heat-drawdown" style="color: ${drawdownTextColor(ticker.drawdownPercent)}">${drawdownText}</span>
+      <span class="heat-drawdown">${drawdownText}</span>
     `;
     cell.addEventListener("click", () => selectComparisonTicker(ticker.rawSymbol));
     container.appendChild(cell);
