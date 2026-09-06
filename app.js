@@ -86,18 +86,22 @@ function heatColor(pct, cap = 3) {
 // is a 50% drawdown). Unlike heatColor this is one-sided (0%..~100%+),
 // so it gets its own text-color ramp: pale/neutral near a new high,
 // deepening to red the further underwater a name is.
+// Bold, unambiguous red/green rather than a subtle gradient -- positive
+// means a real drawdown (price below the all-time high), negative means
+// the price is currently *above* the last known high (a fresh breakout,
+// or the ATH cache just hasn't caught up yet). Matches the same red/green
+// used for "up"/"down" everywhere else in the app.
 function drawdownTextColor(pct) {
   if (pct === null || pct === undefined) return "rgba(226, 232, 240, 0.55)";
-  const t = Math.min(1, pct / 60); // treat 60%+ as "maximally" deep
-  const saturation = 15 + t * 65;
-  const lightness = 68 - t * 22;
-  return `hsl(0, ${saturation}%, ${lightness}%)`;
+  if (Math.abs(pct) < 0.05) return "var(--green)";
+  return pct > 0 ? "var(--red)" : "var(--green)";
 }
 
 function fmtDrawdown(pct) {
   if (pct === null || pct === undefined) return "N/A";
-  if (pct < 0.05) return "At all-time high";
-  return `${pct.toFixed(1)}% off high`;
+  if (Math.abs(pct) < 0.05) return "At all-time high";
+  if (pct > 0) return `↓ ${pct.toFixed(1)}% below high`;
+  return `↑ ${Math.abs(pct).toFixed(1)}% above high`;
 }
 
 function dateOnly(d) {

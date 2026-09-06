@@ -136,11 +136,13 @@ def build_watchlist_response(prices, aths):
         ath = aths.get(t["symbol"])
         drawdown_percent = None
         if price is not None and ath:
-            # Clamp negative (price nosed past a since-stale cached ATH
-            # intraday) to 0 -- "at a new high" reads better than a
-            # confusing negative drawdown, and the cache catches up on its
-            # own next refresh.
-            drawdown_percent = max(0.0, ((ath - price) / ath) * 100)
+            # Signed on purpose: positive means price is below the all-time
+            # high (a real drawdown); negative means price is currently
+            # *above* the cached high -- either a genuine new high made
+            # since the ATH cache last refreshed (see ATH_TTL_SECONDS), or
+            # the name is simply breaking out today. The frontend renders
+            # each side distinctly rather than clamping this to zero.
+            drawdown_percent = ((ath - price) / ath) * 100
 
         tickers_out.append(
             {
