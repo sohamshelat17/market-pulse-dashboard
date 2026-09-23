@@ -136,6 +136,82 @@ function renderRow(ticker) {
   return tr;
 }
 
+// ---------------------------------------------------------------------------
+// Returns-by-period table -- 1D/1W/1M/3M/6M/1Y/5Y/all-time return for every
+// tracked ticker, grouped the same way as the ticker tables above.
+// ---------------------------------------------------------------------------
+
+const RETURN_COLUMNS = [
+  { key: "1D", label: "1D" },
+  { key: "1W", label: "1W" },
+  { key: "1M", label: "1M" },
+  { key: "3M", label: "3M" },
+  { key: "6M", label: "6M" },
+  { key: "1Y", label: "1Y" },
+  { key: "5Y", label: "5Y" },
+  { key: "ALL", label: "All-time" },
+];
+
+function fmtReturn(pct) {
+  if (pct === null || pct === undefined) return { text: "N/A", cls: "na" };
+  const cls = pct > 0 ? "up" : pct < 0 ? "down" : "";
+  const sign = pct > 0 ? "+" : "";
+  return { text: `${sign}${pct.toFixed(1)}%`, cls };
+}
+
+function renderReturnsTable(groups) {
+  const container = document.getElementById("returns-table");
+  if (!groups || !groups.length) {
+    container.innerHTML = '<div class="chart-status static">No return data available.</div>';
+    return;
+  }
+
+  const rowsHtml = [];
+  GROUP_ORDER.forEach((name) => {
+    const group = groups.find((g) => g.group === name);
+    if (!group) return;
+    rowsHtml.push(`<tr class="table-group-row"><td colspan="${2 + RETURN_COLUMNS.length}">${name}</td></tr>`);
+    group.tickers.forEach((ticker) => {
+      const cells = RETURN_COLUMNS.map((col) => {
+        const { text, cls } = fmtReturn(ticker.returns[col.key]);
+        return `<td class="${cls}">${text}</td>`;
+      }).join("");
+      rowsHtml.push(`
+        <tr>
+          <td><span class="ticker-badge">${ticker.symbol}</span></td>
+          <td class="name-cell">${ticker.name}</td>
+          ${cells}
+        </tr>
+      `);
+    });
+  });
+
+  container.innerHTML = `
+    <table class="ticker-table returns-table">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Name</th>
+          ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>${rowsHtml.join("")}</tbody>
+    </table>
+  `;
+}
+
+async function loadReturnsTable() {
+  const container = document.getElementById("returns-table");
+  try {
+    const res = await fetch("/api/returns", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderReturnsTable(data.groups);
+  } catch (err) {
+    container.innerHTML = `<div class="chart-status static">Failed to load returns: ${err.message}</div>`;
+  }
+}
+
 function renderPanel(group) {
   const panel = document.createElement("div");
   panel.className = "panel";
@@ -540,6 +616,49 @@ function alignSeriesToTimestamps(mainTimestamps, intraday, benchmarkData) {
   return rawAligned.map((c) => (c === null || c === undefined ? null : (c / baseClose - 1) * 100));
 }
 
+function formatPointDate(timestamps, range, index) {
+  const date = new Date(timestamps[index] * 1000);
+  if (range === "1D" || range === "5D") {
+    return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+// A small floating label box that follows an anchor point but stays
+// inside the plot bounds (flips to whichever side has room). Each line
+// is either a plain string (default text color) or {text, color} so a
+// hover tooltip can color-code each value to match its line. Shared by
+// the price chart's hover crosshair and the RSI/Volume subpanels' own
+// independent hover tooltips.
+function drawFollowingTooltip(ctx, bounds, anchorX, anchorY, lines) {
+  const { padding, width } = bounds;
+  ctx.font = "11px -apple-system, Segoe UI, sans-serif";
+  const lineHeight = 14;
+  const pad = 6;
+  const textOf = (l) => (typeof l === "string" ? l : l.text);
+  const boxW = Math.max(...lines.map((l) => ctx.measureText(textOf(l)).width)) + pad * 2;
+  const boxH = lines.length * lineHeight + pad * 2;
+
+  let boxX = anchorX + 10;
+  if (boxX + boxW > width - padding.right) boxX = anchorX - boxW - 10;
+  let boxY = anchorY - boxH - 10;
+  if (boxY < padding.top) boxY = anchorY + 10;
+
+  ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(boxX, boxY, boxW, boxH, 4);
+  else ctx.rect(boxX, boxY, boxW, boxH);
+  ctx.fill();
+  ctx.stroke();
+
+  lines.forEach((line, i) => {
+    ctx.fillStyle = typeof line === "string" ? "#e2e8f0" : line.color || "#e2e8f0";
+    ctx.fillText(textOf(line), boxX + pad, boxY + pad + (i + 1) * lineHeight - 4);
+  });
+}
+
 function drawEmaLine(ctx, values, color, xAt, yAt) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
@@ -571,16 +690,20 @@ function createPriceChartController(ids) {
     benchmarks: {}, // {SPY: historyPayload, QQQ: historyPayload} -- only populated on instances with benchmark toggles (see ids.toggleBenchmarkSpy/Qqq)
   };
 
-  function sizeOverlayCanvasToMatch(width, height) {
-    const overlay = document.getElementById(ids.overlayCanvas);
-    if (!overlay) return;
+  // Sizes an overlay canvas to match its base canvas and returns its 2d
+  // context -- shared by the price chart's overlay and the RSI/Volume
+  // subpanels' own independent hover overlays.
+  function sizeOverlayCanvasToMatch(overlayCanvasId, width, height) {
+    const overlay = document.getElementById(overlayCanvasId);
+    if (!overlay) return null;
     const dpr = window.devicePixelRatio || 1;
     overlay.width = width * dpr;
     overlay.height = height * dpr;
     overlay.style.width = `${width}px`;
     overlay.style.height = `${height}px`;
-    state.overlayCtx = overlay.getContext("2d");
-    state.overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const ctx = overlay.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return ctx;
   }
 
   function drawPrice(data) {
@@ -704,7 +827,7 @@ function createPriceChartController(ids) {
       benchmarkMode,
       benchmarkSeries,
     };
-    sizeOverlayCanvasToMatch(width, height);
+    state.overlayCtx = sizeOverlayCanvasToMatch(ids.overlayCanvas, width, height);
   }
 
   function drawRsi(data) {
@@ -712,8 +835,11 @@ function createPriceChartController(ids) {
     const height = 90;
     const { ctx, width } = setupCanvas(canvas, height);
 
-    const { rsi14 } = data;
-    if (!rsi14 || rsi14.length < 2) return;
+    const { rsi14, timestamps, range } = data;
+    if (!rsi14 || rsi14.length < 2) {
+      state.rsiLayout = null;
+      return;
+    }
 
     const padding = { top: 8, right: 12, bottom: 8, left: 56 };
     const plotW = width - padding.left - padding.right;
@@ -753,6 +879,9 @@ function createPriceChartController(ids) {
       }
     });
     ctx.stroke();
+
+    state.rsiLayout = { padding, plotW, plotH, width, height, xAt, yAt, values: rsi14, timestamps, range, n: rsi14.length };
+    state.rsiOverlayCtx = sizeOverlayCanvasToMatch(ids.rsiOverlayCanvas, width, height);
   }
 
   function drawVolume(data) {
@@ -760,8 +889,11 @@ function createPriceChartController(ids) {
     const height = 70;
     const { ctx, width } = setupCanvas(canvas, height);
 
-    const { closes, volumes } = data;
-    if (!volumes || volumes.length < 2) return;
+    const { closes, volumes, timestamps, range } = data;
+    if (!volumes || volumes.length < 2) {
+      state.volumeLayout = null;
+      return;
+    }
 
     const padding = { top: 6, right: 12, bottom: 6, left: 56 };
     const plotW = width - padding.left - padding.right;
@@ -771,6 +903,7 @@ function createPriceChartController(ids) {
     const max = Math.max(...volumes.map((v) => v || 0), 1);
     const barW = Math.max(plotW / n - 1, 1);
     const xAt = (i) => padding.left + (i / (n - 1)) * plotW;
+    const yAt = (v) => padding.top + plotH - (v / max) * plotH;
 
     ctx.fillStyle = "#94a3b8";
     ctx.font = "10px -apple-system, Segoe UI, sans-serif";
@@ -783,6 +916,9 @@ function createPriceChartController(ids) {
       ctx.fillStyle = up ? "rgba(34, 197, 94, 0.6)" : "rgba(239, 68, 68, 0.6)";
       ctx.fillRect(xAt(i) - barW / 2, padding.top + plotH - barH, barW, barH);
     });
+
+    state.volumeLayout = { padding, plotW, plotH, width, height, xAt, yAt, values: volumes, timestamps, range, n };
+    state.volumeOverlayCtx = sizeOverlayCanvasToMatch(ids.volumeOverlayCanvas, width, height);
   }
 
   function renderAll(data) {
@@ -935,46 +1071,7 @@ function createPriceChartController(ids) {
   }
 
   function formatChartPointDate(index) {
-    const { timestamps, range } = state.layout;
-    const date = new Date(timestamps[index] * 1000);
-    if (range === "1D" || range === "5D") {
-      return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    }
-    return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
-  }
-
-  // A small floating label box that follows an anchor point but stays
-  // inside the plot bounds (flips to whichever side has room). Each line
-  // is either a plain string (default text color) or {text, color} so the
-  // hover tooltip can color-code each indicator's value to match its line.
-  function drawFollowingTooltip(anchorX, anchorY, lines) {
-    const { padding, width } = state.layout;
-    const ctx = state.overlayCtx;
-    ctx.font = "11px -apple-system, Segoe UI, sans-serif";
-    const lineHeight = 14;
-    const pad = 6;
-    const textOf = (l) => (typeof l === "string" ? l : l.text);
-    const boxW = Math.max(...lines.map((l) => ctx.measureText(textOf(l)).width)) + pad * 2;
-    const boxH = lines.length * lineHeight + pad * 2;
-
-    let boxX = anchorX + 10;
-    if (boxX + boxW > width - padding.right) boxX = anchorX - boxW - 10;
-    let boxY = anchorY - boxH - 10;
-    if (boxY < padding.top) boxY = anchorY + 10;
-
-    ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(boxX, boxY, boxW, boxH, 4);
-    else ctx.rect(boxX, boxY, boxW, boxH);
-    ctx.fill();
-    ctx.stroke();
-
-    lines.forEach((line, i) => {
-      ctx.fillStyle = typeof line === "string" ? "#e2e8f0" : line.color || "#e2e8f0";
-      ctx.fillText(textOf(line), boxX + pad, boxY + pad + (i + 1) * lineHeight - 4);
-    });
+    return formatPointDate(state.layout.timestamps, state.layout.range, index);
   }
 
   function drawHoverCrosshair(index) {
@@ -1037,7 +1134,7 @@ function createPriceChartController(ids) {
       });
     }
 
-    drawFollowingTooltip(x, y, lines);
+    drawFollowingTooltip(state.overlayCtx, state.layout, x, y, lines);
   }
 
   function drawDragSelection(startIndex, endIndex) {
@@ -1219,6 +1316,83 @@ function createPriceChartController(ids) {
     overlay.addEventListener("touchcancel", endTouch);
   }
 
+  // RSI and Volume each get their own independent hover tooltip (not
+  // synced with the price chart above) -- a vertical guide plus a
+  // single-value readout at the hovered date, driven by each subpanel's
+  // own stored layout (see drawRsi/drawVolume).
+  function initSubpanelHover(overlayCanvasId, layoutKey, ctxKey, formatLine) {
+    const overlay = document.getElementById(overlayCanvasId);
+    if (!overlay) return;
+
+    const xFromClientX = (clientX) => {
+      const rect = overlay.getBoundingClientRect();
+      return clientX - rect.left;
+    };
+
+    const clear = () => {
+      const layout = state[layoutKey];
+      const ctx = state[ctxKey];
+      if (layout && ctx) ctx.clearRect(0, 0, layout.width, layout.height);
+    };
+
+    const showAt = (mouseX) => {
+      const layout = state[layoutKey];
+      const ctx = state[ctxKey];
+      if (!layout || !ctx) return;
+      const t = (mouseX - layout.padding.left) / layout.plotW;
+      const index = Math.max(0, Math.min(layout.n - 1, Math.round(t * (layout.n - 1))));
+      const v = layout.values[index];
+      ctx.clearRect(0, 0, layout.width, layout.height);
+      if (v === null || v === undefined) return;
+
+      const x = layout.xAt(index);
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.5)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, layout.padding.top);
+      ctx.lineTo(x, layout.height - layout.padding.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const y = layout.yAt(v);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      const lines = [formatPointDate(layout.timestamps, layout.range, index), formatLine(v)];
+      drawFollowingTooltip(ctx, layout, x, y, lines);
+    };
+
+    overlay.addEventListener("mousemove", (e) => showAt(xFromClientX(e.clientX)));
+    overlay.addEventListener("mouseleave", clear);
+
+    // Touch support, same reasoning as the price chart's overlay: a touch
+    // has no "hovering before you press" state, so touchstart itself
+    // shows the readout.
+    overlay.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 1) return;
+        e.preventDefault();
+        showAt(xFromClientX(e.touches[0].clientX));
+      },
+      { passive: false }
+    );
+    overlay.addEventListener(
+      "touchmove",
+      (e) => {
+        if (e.touches.length !== 1) return;
+        e.preventDefault();
+        showAt(xFromClientX(e.touches[0].clientX));
+      },
+      { passive: false }
+    );
+    overlay.addEventListener("touchend", clear);
+    overlay.addEventListener("touchcancel", clear);
+  }
+
   function initRangeButtons() {
     const container = document.getElementById(ids.rangeSelect);
     if (!container) return;
@@ -1287,6 +1461,8 @@ function createPriceChartController(ids) {
     initRangeButtons();
     initToggles();
     initInteractivity();
+    initSubpanelHover(ids.rsiOverlayCanvas, "rsiLayout", "rsiOverlayCtx", (v) => ({ text: `RSI: ${v.toFixed(1)}`, color: "#a78bfa" }));
+    initSubpanelHover(ids.volumeOverlayCanvas, "volumeLayout", "volumeOverlayCtx", (v) => ({ text: `Volume: ${fmtVolume(v)}`, color: "#e2e8f0" }));
     if (ids.tickerSelect && ids.wireTickerSelect !== false) {
       const select = document.getElementById(ids.tickerSelect);
       if (select) select.addEventListener("change", (e) => selectTicker(e.target.value));
@@ -1330,18 +1506,25 @@ const primaryChart = createPriceChartController({
   overlayCanvas: "price-chart-overlay",
   rsiSubpanel: "rsi-subpanel",
   rsiCanvas: "rsi-chart",
+  rsiOverlayCanvas: "rsi-chart-overlay",
   volumeSubpanel: "volume-subpanel",
   volumeCanvas: "volume-chart",
+  volumeOverlayCanvas: "volume-chart-overlay",
   defaultSymbol: "SPY",
   wireTickerSelect: false, // the shared primary-ticker cascade owns this select's change event
 });
 
 // Ticker autocomplete for any free-text ticker input (currently just the
 // Stock chart's). Debounced so it doesn't fire a search request per
-// keystroke, and guarded against out-of-order responses so a slow early
-// query can't clobber a faster later one.
+// keystroke, guarded against out-of-order responses so a slow early query
+// can't clobber a faster later one, an in-flight request gets aborted the
+// moment it's superseded rather than left to finish pointlessly, and a
+// small client-side cache makes repeat/backspaced-then-retyped queries
+// within the same session instant with no request at all.
 let tickerSuggestTimer = null;
 let tickerSuggestToken = 0;
+let tickerSuggestAbortController = null;
+const tickerSuggestCache = new Map(); // lowercased query -> results array
 
 function initTickerAutocomplete(inputId, suggestionsId, onSelect) {
   const input = document.getElementById(inputId);
@@ -1378,18 +1561,36 @@ function initTickerAutocomplete(inputId, suggestionsId, onSelect) {
       hide();
       return;
     }
+
+    const cacheKey = query.toLowerCase();
+    const cached = tickerSuggestCache.get(cacheKey);
+    if (cached) {
+      renderSuggestions(cached);
+      return;
+    }
+
     tickerSuggestTimer = setTimeout(async () => {
       const token = ++tickerSuggestToken;
+      if (tickerSuggestAbortController) tickerSuggestAbortController.abort();
+      tickerSuggestAbortController = new AbortController();
       try {
-        const res = await fetch(`/api/symbol-search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
+        const res = await fetch(`/api/symbol-search?q=${encodeURIComponent(query)}`, {
+          cache: "no-store",
+          signal: tickerSuggestAbortController.signal,
+        });
         if (!res.ok) return;
         const data = await res.json();
+        const results = data.results || [];
+        tickerSuggestCache.set(cacheKey, results);
         if (token !== tickerSuggestToken || input.value.trim() !== query) return; // superseded by a newer keystroke
-        renderSuggestions(data.results || []);
-      } catch {
-        /* suggestions are a nice-to-have, not critical -- fail silently */
+        renderSuggestions(results);
+      } catch (err) {
+        /* an aborted (superseded) request is expected, not an error to surface */
+        if (err.name !== "AbortError") {
+          // suggestions are a nice-to-have, not critical -- fail silently otherwise too
+        }
       }
-    }, 200);
+    }, 120);
   });
 
   // mousedown (not click) fires before the input's blur would hide the box.
@@ -1417,6 +1618,8 @@ const comparisonChart = createPriceChartController({
   toggleEma50: "toggle2-ema50",
   toggleEma200: "toggle2-ema200",
   toggleSma200: "toggle2-sma200",
+  toggleBenchmarkSpy: "toggle2-benchmark-spy",
+  toggleBenchmarkQqq: "toggle2-benchmark-qqq",
   toggleRsi: "toggle2-rsi",
   toggleVolume: "toggle2-volume",
   chartMeta: "chart2-meta",
@@ -1425,8 +1628,10 @@ const comparisonChart = createPriceChartController({
   overlayCanvas: "price-chart-2-overlay",
   rsiSubpanel: "rsi-subpanel-2",
   rsiCanvas: "rsi-chart-2",
+  rsiOverlayCanvas: "rsi-chart-2-overlay",
   volumeSubpanel: "volume-subpanel-2",
   volumeCanvas: "volume-chart-2",
+  volumeOverlayCanvas: "volume-chart-2-overlay",
   defaultSymbol: "AAPL", // any ticker works here, not just the tracked ETF list
 });
 
@@ -1993,8 +2198,10 @@ function init() {
   });
   loadQuotes();
   loadWatchlist();
+  loadReturnsTable();
   setInterval(loadQuotes, REFRESH_INTERVAL_MS);
   setInterval(loadWatchlist, REFRESH_INTERVAL_MS);
+  setInterval(loadReturnsTable, REFRESH_INTERVAL_MS);
 }
 
 init();

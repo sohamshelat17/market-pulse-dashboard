@@ -468,6 +468,97 @@ def fetch_history_payload(symbol, range_key):
 
 
 # ---------------------------------------------------------------------------
+# Historical returns table (1W/1M/3M/6M/1Y/5Y/all-time per tracked ticker)
+# ---------------------------------------------------------------------------
+
+RETURN_LOOKBACKS = [
+    ("1W", 7),
+    ("1M", 30),
+    ("3M", 91),
+    ("6M", 183),
+    ("1Y", 365),
+    ("5Y", 5 * 365),
+]
+RETURNS_TTL_SECONDS = 6 * 3600  # same "barely changes intraday" reasoning as ATH_TTL_SECONDS
+
+
+def compute_historical_returns(closes, timestamps):
+    """% return over several fixed lookback windows, plus since-inception,
+    from one full daily-close history: for each window, find the closest
+    available bar at or before that many days back and compare it to the
+    latest close. Today's own change% isn't computed here -- the rest of
+    the dashboard already has a live figure for that (see price_cache),
+    so the returns table reuses it instead of deriving a second, slightly
+    different one from this end-of-day series."""
+    if not closes or len(closes) < 2:
+        return {}
+    latest_close = closes[-1]
+    latest_ts = timestamps[-1]
+    returns = {}
+    for label, days_back in RETURN_LOOKBACKS:
+        target_ts = latest_ts - days_back * 86400
+        base = None
+        for i in range(len(timestamps) - 1, -1, -1):
+            if timestamps[i] <= target_ts:
+                base = closes[i]
+                break
+        returns[label] = round(((latest_close - base) / base) * 100, 2) if base else None
+    first_close = closes[0]
+    returns["ALL"] = round(((latest_close - first_close) / first_close) * 100, 2) if first_close else None
+    return returns
+
+
+def fetch_ticker_historical_returns(symbol):
+    timestamps, closes, _ = fetch_series(symbol, {"interval": "1d", "period1": 0, "period2": int(time.time())})
+    return compute_historical_returns(closes, timestamps)
+
+
+def fetch_all_historical_returns():
+    results = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(fetch_ticker_historical_returns, s): s for s in ALL_SYMBOLS}
+        for future, symbol in futures.items():
+            try:
+                results[symbol] = future.result()
+            except Exception:  # noqa: BLE001
+                results[symbol] = {}
+    return results
+
+
+def build_returns_response():
+    prices = price_cache.get()
+    historical = historical_returns_cache.get()
+
+    groups_out = []
+    for grp in TICKER_GROUPS:
+        rows = []
+        for t in grp["tickers"]:
+            symbol = t["symbol"]
+            p = prices.get(symbol) or {}
+            hist = historical.get(symbol) or {}
+            change_percent = p.get("changePercent")
+            rows.append(
+                {
+                    "symbol": t.get("label", symbol),
+                    "rawSymbol": symbol,
+                    "name": t["name"],
+                    "returns": {
+                        "1D": round(change_percent, 2) if change_percent is not None else None,
+                        "1W": hist.get("1W"),
+                        "1M": hist.get("1M"),
+                        "3M": hist.get("3M"),
+                        "6M": hist.get("6M"),
+                        "1Y": hist.get("1Y"),
+                        "5Y": hist.get("5Y"),
+                        "ALL": hist.get("ALL"),
+                    },
+                }
+            )
+        groups_out.append({"group": grp["group"], "accent": grp["accent"], "tickers": rows})
+    return {"groups": groups_out, "updatedAt": time.time()}
+
+
+# ---------------------------------------------------------------------------
 # Caches
 # ---------------------------------------------------------------------------
 
@@ -521,6 +612,7 @@ price_cache = Cache(PRICE_TTL_SECONDS, fetch_all_prices)
 stats_cache = Cache(STATS_TTL_SECONDS, fetch_all_stats)
 watchlist_price_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_prices)
 watchlist_ath_cache = Cache(ATH_TTL_SECONDS, watchlist.fetch_watchlist_aths)
+historical_returns_cache = Cache(RETURNS_TTL_SECONDS, fetch_all_historical_returns)
 
 _history_cache = {}
 _history_lock = threading.Lock()
@@ -556,6 +648,31 @@ def get_constituents(symbol):
     data = constituents.fetch_constituents_payload(symbol)
     with _constituents_lock:
         _constituents_cache[symbol] = {"data": data, "ts": time.time()}
+    return data
+
+
+SYMBOL_SEARCH_TTL_SECONDS = 600  # results for a given search string barely change minute to minute
+
+_symbol_search_cache = {}
+_symbol_search_lock = threading.Lock()
+
+
+def get_symbol_search(query):
+    """Autocomplete results are keyed by the query text itself -- typing the
+    same prefix again (or another tab searching the same name) is then an
+    instant cache hit instead of another round-trip to Yahoo, which is the
+    dominant source of latency here (confirmed: ~400-500ms per live call
+    even from a fast connection, worse under production load)."""
+    key = query.strip().lower()
+    with _symbol_search_lock:
+        entry = _symbol_search_cache.get(key)
+        now = time.time()
+        if entry and (now - entry["ts"]) <= SYMBOL_SEARCH_TTL_SECONDS:
+            return entry["data"]
+
+    data = fetch_symbol_search(query)
+    with _symbol_search_lock:
+        _symbol_search_cache[key] = {"data": data, "ts": time.time()}
     return data
 
 
@@ -663,6 +780,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_constituents(parse_qs(parsed.query))
         elif parsed.path == "/api/watchlist":
             self._handle_watchlist()
+        elif parsed.path == "/api/returns":
+            self._handle_returns()
         elif parsed.path == "/api/news":
             self._handle_news(parse_qs(parsed.query))
         elif parsed.path == "/api/news/feed":
@@ -685,6 +804,14 @@ class Handler(BaseHTTPRequestHandler):
             prices = watchlist_price_cache.get()
             aths = watchlist_ath_cache.get()
             data = watchlist.build_watchlist_response(prices, aths)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
+    def _handle_returns(self):
+        try:
+            data = build_returns_response()
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return
@@ -713,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"results": []})
             return
         try:
-            results = fetch_symbol_search(q)
+            results = get_symbol_search(q)
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return

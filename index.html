@@ -93,11 +93,17 @@
         <div class="chart-hint">Hover for price · click and drag to measure change</div>
         <div class="chart-subpanel" id="rsi-subpanel" hidden>
           <div class="subpanel-label">RSI (14)</div>
-          <canvas id="rsi-chart" height="90"></canvas>
+          <div class="subpanel-canvas-wrap">
+            <canvas id="rsi-chart" height="90"></canvas>
+            <canvas id="rsi-chart-overlay" height="90"></canvas>
+          </div>
         </div>
         <div class="chart-subpanel" id="volume-subpanel">
           <div class="subpanel-label">Volume</div>
-          <canvas id="volume-chart" height="70"></canvas>
+          <div class="subpanel-canvas-wrap">
+            <canvas id="volume-chart" height="70"></canvas>
+            <canvas id="volume-chart-overlay" height="70"></canvas>
+          </div>
         </div>
       </div>
 
@@ -140,6 +146,14 @@
             <i class="swatch sma200"></i>200 SMA
           </label>
           <label class="toggle-pill">
+            <input type="checkbox" id="toggle2-benchmark-spy" />
+            <i class="swatch benchmark-spy"></i>SPY
+          </label>
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle2-benchmark-qqq" />
+            <i class="swatch benchmark-qqq"></i>QQQ
+          </label>
+          <label class="toggle-pill">
             <input type="checkbox" id="toggle2-rsi" />
             <i class="swatch rsi"></i>RSI (14)
           </label>
@@ -157,11 +171,17 @@
         <div class="chart-hint">Hover for price · click and drag to measure change</div>
         <div class="chart-subpanel" id="rsi-subpanel-2" hidden>
           <div class="subpanel-label">RSI (14)</div>
-          <canvas id="rsi-chart-2" height="90"></canvas>
+          <div class="subpanel-canvas-wrap">
+            <canvas id="rsi-chart-2" height="90"></canvas>
+            <canvas id="rsi-chart-2-overlay" height="90"></canvas>
+          </div>
         </div>
         <div class="chart-subpanel" id="volume-subpanel-2">
           <div class="subpanel-label">Volume</div>
-          <canvas id="volume-chart-2" height="70"></canvas>
+          <div class="subpanel-canvas-wrap">
+            <canvas id="volume-chart-2" height="70"></canvas>
+            <canvas id="volume-chart-2-overlay" height="70"></canvas>
+          </div>
         </div>
       </div>
 
@@ -214,6 +234,16 @@
         <button id="refresh-btn" class="refresh-btn">Refresh</button>
       </div>
       <div id="groups" class="groups-stack"></div>
+
+      <div class="panel heatmap-panel">
+        <div class="panel-header">
+          <span class="dot" style="background: var(--dot-green)"></span>
+          Returns by period — all tickers
+        </div>
+        <div id="returns-table" class="table-wrap">
+          <div class="chart-status static">Loading…</div>
+        </div>
+      </div>
     </section>
 
     <section id="relevant-news" class="tab-panel">

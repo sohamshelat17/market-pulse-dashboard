@@ -327,6 +327,21 @@ body {
   display: block;
 }
 
+.subpanel-canvas-wrap {
+  position: relative;
+}
+
+#rsi-chart-overlay,
+#rsi-chart-2-overlay,
+#volume-chart-overlay,
+#volume-chart-2-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
 .range-btn {
   background: var(--bg);
   border: 1px solid var(--panel-border);
@@ -715,6 +730,17 @@ table.ticker-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
+}
+
+.returns-table .table-group-row td {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--panel-border);
 }
 
 .ticker-table th {
