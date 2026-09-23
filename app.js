@@ -486,6 +486,8 @@ const INDICATOR_COLORS = {
   ema50: "#ec4899",
   ema200: "#a3e635",
   sma200: "#14b8a6",
+  spy: "#e2e8f0",
+  qqq: "#f97316",
 };
 
 function formatAxisLabel(date, range) {
@@ -509,6 +511,33 @@ function setupCanvas(canvas, height) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   return { ctx, width, height };
+}
+
+// Aligns a benchmark's (SPY/QQQ) own price series onto another series'
+// timestamps -- matching by exact timestamp for intraday bars, by
+// calendar date for daily ones, since two tickers' intraday bar grids
+// line up exactly but their daily bars can carry slightly different
+// time-of-day metadata -- then rebases it to 0% at whichever of those
+// timestamps is the benchmark's own first available match. That's what
+// makes two names with different listing histories (or an intraday
+// series starting mid-session) comparable over the same calendar window,
+// rather than each starting from a different baseline.
+function alignSeriesToTimestamps(mainTimestamps, intraday, benchmarkData) {
+  if (!benchmarkData || !benchmarkData.timestamps || !benchmarkData.closes) return null;
+  const keyOf = (t) => (intraday ? t : getDateKey(new Date(t * 1000)));
+  const byKey = new Map();
+  benchmarkData.timestamps.forEach((t, i) => {
+    const c = benchmarkData.closes[i];
+    if (c !== null && c !== undefined) byKey.set(keyOf(t), c);
+  });
+
+  const rawAligned = mainTimestamps.map((t) => {
+    const c = byKey.get(keyOf(t));
+    return c === undefined ? null : c;
+  });
+  const baseClose = rawAligned.find((c) => c !== null && c !== undefined);
+  if (baseClose === undefined || !baseClose) return null;
+  return rawAligned.map((c) => (c === null || c === undefined ? null : (c / baseClose - 1) * 100));
 }
 
 function drawEmaLine(ctx, values, color, xAt, yAt) {
@@ -538,7 +567,8 @@ function createPriceChartController(ids) {
     layout: null,
     overlayCtx: null,
     dragState: null, // null | {startIndex, endIndex, active}
-    toggles: { ema8: false, ema: false, ema50: false, ema200: false, sma200: false, rsi: false, volume: true },
+    toggles: { ema8: false, ema: false, ema50: false, ema200: false, sma200: false, benchmarkSpy: false, benchmarkQqq: false, rsi: false, volume: true },
+    benchmarks: {}, // {SPY: historyPayload, QQQ: historyPayload} -- only populated on instances with benchmark toggles (see ids.toggleBenchmarkSpy/Qqq)
   };
 
   function sizeOverlayCanvasToMatch(width, height) {
@@ -560,7 +590,7 @@ function createPriceChartController(ids) {
     const height = 260;
     const { ctx, width } = setupCanvas(canvas, height);
 
-    const { closes, ema8, ema21, ema50, ema200, sma200, timestamps, range } = data;
+    const { closes, ema8, ema21, ema50, ema200, sma200, timestamps, range, intraday } = data;
     if (!closes || closes.length < 2) {
       state.layout = null;
       return;
@@ -570,17 +600,42 @@ function createPriceChartController(ids) {
     const plotW = width - padding.left - padding.right;
     const plotH = height - padding.top - padding.bottom;
 
+    // Benchmark mode: every line (main price, any toggled EMA/SMA, and the
+    // benchmarks themselves) is rebased to % change from this chart's own
+    // first bar, so a ticker at a totally different price level than
+    // SPY/QQQ is still directly comparable as a performance line instead
+    // of one flattening against the other's scale.
+    const benchmarkMode = state.toggles.benchmarkSpy || state.toggles.benchmarkQqq;
+    const baseClose = closes[0];
+    const toPct = (v) => (v === null || v === undefined ? null : (v / baseClose - 1) * 100);
+
     const emaSeries = [
       { key: "ema8", values: ema8, color: INDICATOR_COLORS.ema8 },
       { key: "ema", values: ema21, color: INDICATOR_COLORS.ema21 },
       { key: "ema50", values: ema50, color: INDICATOR_COLORS.ema50 },
       { key: "ema200", values: ema200, color: INDICATOR_COLORS.ema200 },
       { key: "sma200", values: sma200, color: INDICATOR_COLORS.sma200 },
-    ];
+    ].map((s) => ({ ...s, values: benchmarkMode && s.values ? s.values.map(toPct) : s.values }));
+
+    const benchmarkSeries = [];
+    if (benchmarkMode) {
+      [
+        { key: "benchmarkSpy", symbol: "SPY", color: INDICATOR_COLORS.spy },
+        { key: "benchmarkQqq", symbol: "QQQ", color: INDICATOR_COLORS.qqq },
+      ].forEach((b) => {
+        if (!state.toggles[b.key]) return;
+        const aligned = alignSeriesToTimestamps(timestamps, !!intraday, state.benchmarks[b.symbol]);
+        if (aligned) benchmarkSeries.push({ ...b, values: aligned });
+      });
+    }
+
+    const plottedMain = benchmarkMode ? closes.map(toPct) : closes;
+
     const visibleEmaValues = emaSeries
       .filter((s) => state.toggles[s.key] && s.values)
       .flatMap((s) => s.values.filter((v) => v !== null && v !== undefined));
-    const allValues = closes.concat(visibleEmaValues);
+    const benchmarkValues = benchmarkSeries.flatMap((s) => s.values.filter((v) => v !== null && v !== undefined));
+    const allValues = plottedMain.concat(visibleEmaValues, benchmarkValues);
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
     const span = max - min || 1;
@@ -588,7 +643,7 @@ function createPriceChartController(ids) {
     const xAt = (i) => padding.left + (i / (closes.length - 1)) * plotW;
     const yAt = (v) => padding.top + plotH - ((v - min) / span) * plotH;
 
-    // gridlines + price labels
+    // gridlines + price/percent labels
     ctx.strokeStyle = "#1e293b";
     ctx.fillStyle = "#94a3b8";
     ctx.font = "10px -apple-system, Segoe UI, sans-serif";
@@ -601,7 +656,8 @@ function createPriceChartController(ids) {
       ctx.moveTo(padding.left, y);
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
-      ctx.fillText(`$${v.toFixed(v < 20 ? 2 : 0)}`, 4, y + 3);
+      const label = benchmarkMode ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : `$${v.toFixed(v < 20 ? 2 : 0)}`;
+      ctx.fillText(label, 4, y + 3);
     }
 
     // x-axis labels (first, ~1/3, ~2/3, last)
@@ -613,11 +669,11 @@ function createPriceChartController(ids) {
       ctx.fillText(text, Math.min(Math.max(x - 20, padding.left), width - padding.right - 40), height - 6);
     });
 
-    // price line
+    // main price/percent line
     ctx.strokeStyle = INDICATOR_COLORS.price;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    closes.forEach((v, i) => {
+    plottedMain.forEach((v, i) => {
       const x = xAt(i);
       const y = yAt(v);
       if (i === 0) ctx.moveTo(x, y);
@@ -628,8 +684,26 @@ function createPriceChartController(ids) {
     emaSeries.forEach((s) => {
       if (state.toggles[s.key] && s.values) drawEmaLine(ctx, s.values, s.color, xAt, yAt);
     });
+    benchmarkSeries.forEach((s) => drawEmaLine(ctx, s.values, s.color, xAt, yAt));
 
-    state.layout = { padding, plotW, plotH, width, height, min, max, span, xAt, yAt, closes, timestamps, range, n: closes.length };
+    state.layout = {
+      padding,
+      plotW,
+      plotH,
+      width,
+      height,
+      min,
+      max,
+      span,
+      xAt,
+      yAt,
+      closes: plottedMain,
+      timestamps,
+      range,
+      n: closes.length,
+      benchmarkMode,
+      benchmarkSeries,
+    };
     sizeOverlayCanvasToMatch(width, height);
   }
 
@@ -738,6 +812,34 @@ function createPriceChartController(ids) {
     el.textContent = `${data.symbol.replace("^", "")} • ${startText} – ${endText} (${granularity}) • latest 8 EMA: ${ema8Text} • latest 21 EMA: ${ema21Text} • latest 50 EMA: ${ema50Text} • latest 200 EMA: ${ema200Text} • latest 200 SMA: ${sma200Text}`;
   }
 
+  // Fetches SPY/QQQ's own history for the *current* range (shared
+  // historyCache, so this is free once any chart has loaded that
+  // symbol+range combo) and stashes it for drawPrice's alignment step.
+  // Only ever called for symbols with an active benchmark toggle.
+  async function loadBenchmarkSeries(symbol) {
+    const cacheKey = `${symbol}:${state.range}`;
+    let data = historyCache.get(cacheKey);
+    if (!data) {
+      try {
+        const res = await fetch(`/api/history?symbol=${encodeURIComponent(symbol)}&range=${state.range}`, { cache: "no-store" });
+        if (res.ok) {
+          data = await res.json();
+          historyCache.set(cacheKey, data);
+        }
+      } catch {
+        /* a benchmark fetch failing is non-fatal -- that line just won't draw this cycle */
+      }
+    }
+    state.benchmarks[symbol] = data || null;
+  }
+
+  async function refreshActiveBenchmarks() {
+    const wanted = [];
+    if (state.toggles.benchmarkSpy) wanted.push("SPY");
+    if (state.toggles.benchmarkQqq) wanted.push("QQQ");
+    if (wanted.length) await Promise.all(wanted.map(loadBenchmarkSeries));
+  }
+
   async function load(symbol, range) {
     const statusEl = document.getElementById(ids.chartStatus);
     const cacheKey = `${symbol}:${range}`;
@@ -745,6 +847,7 @@ function createPriceChartController(ids) {
     if (historyCache.has(cacheKey)) {
       const data = historyCache.get(cacheKey);
       state.data = data;
+      await refreshActiveBenchmarks();
       renderAll(data);
       updateMeta(data);
       statusEl.textContent = "";
@@ -768,6 +871,7 @@ function createPriceChartController(ids) {
       historyCache.set(cacheKey, data);
       if (state.symbol !== symbol || state.range !== range) return; // user switched away while loading
       state.data = data;
+      await refreshActiveBenchmarks();
       renderAll(data);
       updateMeta(data);
       statusEl.textContent = "";
@@ -875,13 +979,15 @@ function createPriceChartController(ids) {
 
   function drawHoverCrosshair(index) {
     if (!state.layout || !state.data) return;
-    const { padding, width, height, xAt, yAt, closes } = state.layout;
+    const { padding, width, height, xAt, yAt, closes, benchmarkMode, benchmarkSeries } = state.layout;
     const ctx = state.overlayCtx;
     ctx.clearRect(0, 0, width, height);
 
     const x = xAt(index);
     const price = closes[index];
     const y = yAt(price);
+    const fmtVal = (v) => (benchmarkMode ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` : `$${v.toFixed(2)}`);
+    const baseClose = state.data.closes[0];
 
     ctx.strokeStyle = "rgba(148, 163, 184, 0.5)";
     ctx.lineWidth = 1;
@@ -897,7 +1003,7 @@ function createPriceChartController(ids) {
     ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
 
-    const lines = [formatChartPointDate(index), { text: `Price: $${price.toFixed(2)}`, color: INDICATOR_COLORS.price }];
+    const lines = [formatChartPointDate(index), { text: `Price: ${fmtVal(price)}`, color: INDICATOR_COLORS.price }];
     [
       { key: "ema8", label: "8 EMA", values: state.data.ema8, color: INDICATOR_COLORS.ema8 },
       { key: "ema", label: "21 EMA", values: state.data.ema21, color: INDICATOR_COLORS.ema21 },
@@ -906,9 +1012,10 @@ function createPriceChartController(ids) {
       { key: "sma200", label: "200 SMA", values: state.data.sma200, color: INDICATOR_COLORS.sma200 },
     ].forEach((s) => {
       if (!state.toggles[s.key] || !s.values) return;
-      const v = s.values[index];
-      if (v === null || v === undefined) return;
-      lines.push({ text: `${s.label}: $${v.toFixed(2)}`, color: s.color });
+      const raw = s.values[index];
+      if (raw === null || raw === undefined) return;
+      const v = benchmarkMode ? (raw / baseClose - 1) * 100 : raw;
+      lines.push({ text: `${s.label}: ${fmtVal(v)}`, color: s.color });
       // A small dot on each visible indicator's own line at this index,
       // same idea as the price dot, so the tooltip values are traceable
       // back to the actual line on the chart.
@@ -918,12 +1025,24 @@ function createPriceChartController(ids) {
       ctx.fill();
     });
 
+    if (benchmarkMode && benchmarkSeries) {
+      benchmarkSeries.forEach((s) => {
+        const v = s.values[index];
+        if (v === null || v === undefined) return;
+        lines.push({ text: `${s.symbol}: ${fmtVal(v)}`, color: s.color });
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(x, yAt(v), 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
     drawFollowingTooltip(x, y, lines);
   }
 
   function drawDragSelection(startIndex, endIndex) {
     if (!state.layout) return;
-    const { padding, width, height, xAt, yAt, closes } = state.layout;
+    const { padding, width, height, xAt, yAt, closes, benchmarkMode } = state.layout;
     const ctx = state.overlayCtx;
     ctx.clearRect(0, 0, width, height);
 
@@ -964,10 +1083,19 @@ function createPriceChartController(ids) {
     });
 
     const sign = change >= 0 ? "+" : "−";
-    const lines = [
-      `${formatChartPointDate(startIndex)} → ${formatChartPointDate(endIndex)}`,
-      `${sign}$${Math.abs(change).toFixed(2)} (${sign}${Math.abs(pct).toFixed(2)}%)`,
-    ];
+    // In benchmark mode `closes` here is already the normalized %-change
+    // series, so `change` is a difference of two percentages -- reported
+    // as percentage points (the actual relative-outperformance number),
+    // not run through another %-of-a-% calculation.
+    const lines = benchmarkMode
+      ? [
+          `${formatChartPointDate(startIndex)} → ${formatChartPointDate(endIndex)}`,
+          `${startPrice >= 0 ? "+" : ""}${startPrice.toFixed(1)}% → ${endPrice >= 0 ? "+" : ""}${endPrice.toFixed(1)}% (${sign}${Math.abs(change).toFixed(1)}pp)`,
+        ]
+      : [
+          `${formatChartPointDate(startIndex)} → ${formatChartPointDate(endIndex)}`,
+          `${sign}$${Math.abs(change).toFixed(2)} (${sign}${Math.abs(pct).toFixed(2)}%)`,
+        ];
 
     ctx.font = "12px -apple-system, Segoe UI, sans-serif";
     const pad = 7;
@@ -1131,6 +1259,24 @@ function createPriceChartController(ids) {
     wire(ids.toggleSma200, "sma200", undefined, drawPrice);
     wire(ids.toggleRsi, "rsi", rsiPanel, drawRsi);
     wire(ids.toggleVolume, "volume", volumePanel, drawVolume);
+
+    // Benchmarks need their own wiring (unlike the toggles above) since
+    // turning one on may need to fetch SPY/QQQ's history first -- an
+    // async step the generic `wire` helper above doesn't do.
+    const wireBenchmark = (checkboxId, key, symbol) => {
+      const el = document.getElementById(checkboxId);
+      if (!el) return;
+      const pill = el.closest(".toggle-pill");
+      if (pill) pill.classList.toggle("checked", el.checked);
+      el.addEventListener("change", async (e) => {
+        state.toggles[key] = e.target.checked;
+        if (pill) pill.classList.toggle("checked", e.target.checked);
+        if (e.target.checked) await loadBenchmarkSeries(symbol);
+        if (state.data) renderAll(state.data);
+      });
+    };
+    wireBenchmark(ids.toggleBenchmarkSpy, "benchmarkSpy", "SPY");
+    wireBenchmark(ids.toggleBenchmarkQqq, "benchmarkQqq", "QQQ");
   }
 
   function handleResize() {
@@ -1174,6 +1320,8 @@ const primaryChart = createPriceChartController({
   toggleEma50: "toggle-ema50",
   toggleEma200: "toggle-ema200",
   toggleSma200: "toggle-sma200",
+  toggleBenchmarkSpy: "toggle-benchmark-spy",
+  toggleBenchmarkQqq: "toggle-benchmark-qqq",
   toggleRsi: "toggle-rsi",
   toggleVolume: "toggle-volume",
   chartMeta: "chart-meta",

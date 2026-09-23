@@ -259,6 +259,8 @@ body {
 .swatch.ema50 { background: #ec4899; }
 .swatch.ema200 { background: #a3e635; }
 .swatch.sma200 { background: #14b8a6; }
+.swatch.benchmark-spy { background: #e2e8f0; }
+.swatch.benchmark-qqq { background: #f97316; }
 .swatch.rsi { background: var(--violet); }
 .swatch.volume { background: #64748b; }
 
