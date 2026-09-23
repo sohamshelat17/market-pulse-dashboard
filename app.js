@@ -631,7 +631,7 @@ function formatPointDate(timestamps, range, index) {
 // the price chart's hover crosshair and the RSI/Volume subpanels' own
 // independent hover tooltips.
 function drawFollowingTooltip(ctx, bounds, anchorX, anchorY, lines) {
-  const { padding, width } = bounds;
+  const { padding, width, height } = bounds;
   ctx.font = "11px -apple-system, Segoe UI, sans-serif";
   const lineHeight = 14;
   const pad = 6;
@@ -641,8 +641,16 @@ function drawFollowingTooltip(ctx, bounds, anchorX, anchorY, lines) {
 
   let boxX = anchorX + 10;
   if (boxX + boxW > width - padding.right) boxX = anchorX - boxW - 10;
+  boxX = Math.max(padding.left, Math.min(boxX, width - padding.right - boxW));
+
   let boxY = anchorY - boxH - 10;
   if (boxY < padding.top) boxY = anchorY + 10;
+  // On a short panel (RSI/Volume, ~70-90px tall) the flip above can still
+  // leave the box taller than the remaining space below the anchor --
+  // clamp it fully inside the canvas so a multi-line tooltip never gets
+  // clipped off the bottom edge the way it would on the much taller
+  // (260px) price chart, where this case basically never comes up.
+  boxY = Math.max(padding.top, Math.min(boxY, height - padding.bottom - boxH));
 
   ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
   ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
