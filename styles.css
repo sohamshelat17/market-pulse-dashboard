@@ -738,21 +738,15 @@ table.ticker-table {
   font-size: 12.5px;
 }
 
-/* The returns table gets its own bounded, independently-scrolling region
-   (rather than relying on page-level scroll) so its sticky header has a
-   scroll container that's actually its own -- the enclosing .panel uses
-   overflow:hidden (for rounded-corner clipping) which would otherwise sit
-   between the header and the page viewport and break the stickiness. */
+/* Bounded, independently-scrolling region so long ticker lists don't push
+   the rest of the page down endlessly. */
 #returns-table {
   max-height: 640px;
   overflow-y: auto;
 }
 
-.returns-table thead th {
-  position: sticky;
-  top: 0;
+.returns-table .table-header-row th {
   background: var(--panel-bg);
-  z-index: 1;
 }
 
 .returns-table .table-group-row td {

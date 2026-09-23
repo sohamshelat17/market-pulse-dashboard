@@ -166,10 +166,23 @@ function renderReturnsTable(groups) {
     return;
   }
 
+  // Repeated (rather than sticky) per-group header row: the table lives
+  // inside .panel, which uses overflow:hidden for rounded-corner clipping
+  // and defeats position:sticky no matter which ancestor owns the scroll,
+  // so instead every group gets its own header row scrolled in with it.
+  const headerRowHtml = `
+    <tr class="table-header-row">
+      <th>Ticker</th>
+      <th>Name</th>
+      ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
+    </tr>
+  `;
+
   const rowsHtml = [];
   GROUP_ORDER.forEach((name) => {
     const group = groups.find((g) => g.group === name);
     if (!group) return;
+    rowsHtml.push(headerRowHtml);
     rowsHtml.push(`<tr class="table-group-row"><td colspan="${2 + RETURN_COLUMNS.length}">${name}</td></tr>`);
     group.tickers.forEach((ticker) => {
       const cells = RETURN_COLUMNS.map((col) => {
@@ -188,13 +201,6 @@ function renderReturnsTable(groups) {
 
   container.innerHTML = `
     <table class="ticker-table returns-table">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Name</th>
-          ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
-        </tr>
-      </thead>
       <tbody>${rowsHtml.join("")}</tbody>
     </table>
   `;
