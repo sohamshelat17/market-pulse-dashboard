@@ -522,6 +522,18 @@ def fetch_all_historical_returns():
                 results[symbol] = future.result()
             except Exception:  # noqa: BLE001
                 results[symbol] = {}
+
+    # A handful of individual fetches can fail under the initial burst of
+    # 34-way concurrent requests (contention, not a real per-ticker
+    # problem -- confirmed by the same fetch succeeding instantly in
+    # isolation). Retry any that came back empty one more time, serially
+    # now that the burst has died down, rather than letting a transient
+    # failure sit cached as "no data" for the full RETURNS_TTL_SECONDS.
+    for symbol in [s for s, r in results.items() if not r]:
+        try:
+            results[symbol] = fetch_ticker_historical_returns(symbol)
+        except Exception:  # noqa: BLE001
+            pass  # still unlucky -- leave it empty this cycle, next refresh tries again
     return results
 
 

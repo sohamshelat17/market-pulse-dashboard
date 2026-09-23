@@ -123,6 +123,17 @@ def fetch_watchlist_aths():
                 results[symbol] = future.result()
             except Exception:
                 results[symbol] = None
+
+    # A handful of individual fetches can fail under the initial burst of
+    # 75-way concurrent requests (contention, not a real per-ticker
+    # problem). Retry any that failed one more time, serially now that
+    # the burst has died down, rather than letting a transient failure
+    # sit cached as "N/A" for the full ATH_TTL_SECONDS.
+    for symbol in [s for s, r in results.items() if r is None]:
+        try:
+            results[symbol] = fetch_all_time_high(symbol)
+        except Exception:
+            pass  # still unlucky -- leave it None this cycle, next refresh tries again
     return results
 
 
