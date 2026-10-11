@@ -851,60 +851,84 @@ table.ticker-table {
   }
 }
 
-/* ---------- relevant news tab ---------- */
+/* ---------- financial health tab ---------- */
 
-.news-recency-toggle {
-  display: flex;
-  gap: 6px;
+.ticker-table tbody tr.selected-row {
+  background: rgba(59, 130, 246, 0.1);
 }
 
-.recency-btn {
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 5px;
-  cursor: pointer;
+.earnings-soon {
+  color: var(--amber);
+  font-weight: 700;
 }
 
-.recency-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--blue);
-}
-
-.recency-btn.active {
-  color: #fff;
-  background: var(--blue);
-  border-color: var(--blue);
-}
-
-.news-insider-list {
+.health-detail-body {
+  padding: 4px 16px 16px;
   display: flex;
   flex-direction: column;
-  padding: 4px 16px 12px;
+  gap: 18px;
 }
 
-.news-insider-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--row-border);
+.health-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.health-note {
   font-size: 12.5px;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
 }
 
-.news-insider-row:last-child {
-  border-bottom: none;
+.health-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
 }
 
-.news-insider-row .feed-ticker-badge {
-  flex: 0 0 auto;
+.stat-card {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
-.news-insider-summary {
+.stat-label {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.health-material-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.health-material-list li {
+  padding: 4px 0;
+}
+
+.health-material-list a {
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.health-material-list a:hover {
+  text-decoration: underline;
 }
 
 .news-feed {
@@ -921,19 +945,6 @@ table.ticker-table {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-}
-
-.feed-ticker-badge {
-  display: inline-block;
-  min-width: 48px;
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-  padding: 3px 6px;
-  border-radius: 5px;
-  color: var(--blue);
-  background: var(--blue-bg);
-  flex: 0 0 auto;
 }
 
 .feed-item-main {

@@ -2026,16 +2026,13 @@ function renderConstituentsHeatmap(container, metaEl, data) {
 }
 
 // ---------------------------------------------------------------------------
-// Relevant News tab -- a single reverse-chronological feed combining news +
-// SEC material events (8-Ks) across every watchlist ticker, filtered to a
-// user-selected recency window so older items never show up. Insider
-// activity (Form 4 buy/sell summaries) is a rolled-up-over-time signal
-// rather than a single dated event, so it gets its own compact section
-// instead of competing for a slot in the main feed.
+// Financial Health tab -- an at-a-glance overview table of every watchlist
+// ticker (earnings date, last quarter beat/miss, analyst view, growth &
+// margins), click a row to open a full detail view for that ticker:
+// earnings history, forward estimates, analyst targets, balance-sheet/
+// cash-flow health ratios, annual revenue/earnings trend, news, SEC
+// material events (8-Ks), and insider activity.
 // ---------------------------------------------------------------------------
-
-let newsFeedData = null; // raw {tickers, generatedAt} from /api/news/feed
-let newsRecencyHours = 72;
 
 function fmtInsiderShares(shares) {
   if (shares == null) return "—";
@@ -2092,136 +2089,354 @@ function fmtRelativeTime(epochMs) {
   return `${days}d ago`;
 }
 
-// Flattens every ticker's newsItems + materialEvents into one list, each
-// tagged with which company it's about and a comparable epoch so the whole
-// set can be sorted/filtered together regardless of source date format.
-// Items with an unparseable date are dropped rather than kept -- the entire
-// point of this feed is recency, so an unknown-age item is worse than a
-// missing one.
-function buildCombinedFeedItems(tickers) {
-  const items = [];
-  tickers.forEach((t) => {
-    (t.newsItems || []).forEach((item) => {
-      const epochMs = new Date(item.publishedAt).getTime();
-      if (isNaN(epochMs)) return;
-      items.push({
-        kind: "news",
-        symbol: t.symbol,
-        name: t.name,
-        title: item.title,
-        link: item.link,
-        source: item.source,
-        category: item.category,
-        epochMs,
-      });
-    });
-    (t.materialEvents || []).forEach((event) => {
-      if (!event.date) return;
-      const epochMs = parseISODateLocal(event.date).getTime();
-      if (isNaN(epochMs)) return;
-      items.push({
-        kind: "material",
-        symbol: t.symbol,
-        name: t.name,
-        title: event.items.join(", "),
-        link: event.link,
-        source: "SEC Form 8-K",
-        category: "material",
-        epochMs,
-      });
-    });
-  });
-  items.sort((a, b) => b.epochMs - a.epochMs);
-  return items;
+let latestHealthTickers = [];
+let selectedHealthSymbol = null;
+
+function fmtDaysAway(dateStr, isEstimate) {
+  if (!dateStr) return { text: "N/A", cls: "na" };
+  const target = parseISODateLocal(dateStr);
+  const diffDays = Math.round((dateOnly(target) - dateOnly(new Date())) / 86400000);
+  const whenText = diffDays > 0 ? `in ${diffDays}d` : diffDays === 0 ? "today" : `${Math.abs(diffDays)}d ago`;
+  const dateLabel = target.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const estText = isEstimate ? " (est.)" : "";
+  return { text: `${dateLabel} (${whenText})${estText}`, cls: diffDays >= 0 && diffDays <= 14 ? "earnings-soon" : "" };
 }
 
-function collectRecentInsiderActivity(tickers, cutoffMs) {
-  const rows = [];
-  tickers.forEach((t) => {
-    const summary = t.insiderSummary;
-    if (!summary) return;
-    const dates = [summary.buys && summary.buys.mostRecentDate, summary.sells && summary.sells.mostRecentDate].filter(Boolean);
-    if (!dates.length) return;
-    const mostRecent = dates.sort().slice(-1)[0];
-    const epochMs = parseISODateLocal(mostRecent).getTime();
-    if (isNaN(epochMs) || epochMs < cutoffMs) return;
-    rows.push({ symbol: t.symbol, name: t.name, summary, epochMs });
-  });
-  rows.sort((a, b) => b.epochMs - a.epochMs);
-  return rows;
+function fmtSurprise(pct) {
+  if (pct === null || pct === undefined) return { text: "N/A", cls: "na" };
+  const cls = pct > 0 ? "up" : pct < 0 ? "down" : "";
+  const sign = pct > 0 ? "+" : "";
+  return { text: `${sign}${(pct * 100).toFixed(1)}%`, cls };
 }
 
-function renderNewsFeed() {
-  if (!newsFeedData) return;
-  const feedEl = document.getElementById("news-feed");
-  const insiderPanel = document.getElementById("news-insider-panel");
-  const insiderList = document.getElementById("news-insider-list");
+function fmtRecommendationBadge(key) {
+  if (!key || key === "none") return { text: "N/A", cls: "na" };
+  const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const cls = key.includes("buy") ? "up" : key.includes("sell") ? "down" : "";
+  return { text: label, cls };
+}
 
-  const cutoffMs = Date.now() - newsRecencyHours * 3600 * 1000;
-  const tickers = newsFeedData.tickers;
+function fmtTargetUpside(price, targetMean) {
+  if (price == null || targetMean == null) return { text: "N/A", cls: "na" };
+  const pct = ((targetMean - price) / price) * 100;
+  const sign = pct >= 0 ? "+" : "";
+  return { text: `${sign}${pct.toFixed(1)}%`, cls: pct >= 0 ? "up" : "down" };
+}
 
-  const items = buildCombinedFeedItems(tickers).filter((item) => item.epochMs >= cutoffMs);
+function fmtPctFraction(value, digits = 1) {
+  if (value === null || value === undefined) return "N/A";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${(value * 100).toFixed(digits)}%`;
+}
 
-  feedEl.innerHTML = items.length
-    ? items
+function fmtPctPlain(value, digits = 1) {
+  if (value === null || value === undefined) return "N/A";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function fmtPctRaw(value, digits = 1) {
+  if (value === null || value === undefined) return "N/A";
+  return `${value.toFixed(digits)}%`;
+}
+
+function statCard(label, value) {
+  return `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
+}
+
+const HEALTH_OVERVIEW_COLUMNS = [
+  "Ticker",
+  "Name",
+  "Next Earnings",
+  "Last Qtr Surprise",
+  "Analyst Rating",
+  "Target Upside",
+  "Rev Growth",
+  "Profit Margin",
+];
+
+function renderHealthOverviewRow(t) {
+  const next = t.nextEarnings || {};
+  const earningsFmt = fmtDaysAway(next.date, next.isEstimate);
+  const history = t.earningsHistory || [];
+  const lastQ = history.length ? history[history.length - 1] : null;
+  const surpriseFmt = lastQ ? fmtSurprise(lastQ.surprisePercent) : { text: "N/A", cls: "na" };
+  const analyst = t.analyst || {};
+  const ratingFmt = fmtRecommendationBadge(analyst.recommendationKey);
+  const upsideFmt = fmtTargetUpside(t.price, analyst.targetMean);
+  const ratios = t.ratios || {};
+  const revGrowthCls = ratios.revenueGrowth == null ? "na" : ratios.revenueGrowth >= 0 ? "up" : "down";
+
+  const tr = document.createElement("tr");
+  tr.dataset.symbol = t.rawSymbol;
+  tr.innerHTML = `
+    <td><span class="ticker-badge">${t.symbol}</span></td>
+    <td class="name-cell">${t.name}</td>
+    <td class="${earningsFmt.cls}">${earningsFmt.text}</td>
+    <td class="${surpriseFmt.cls}">${surpriseFmt.text}</td>
+    <td class="${ratingFmt.cls}">${ratingFmt.text}</td>
+    <td class="${upsideFmt.cls}">${upsideFmt.text}</td>
+    <td class="${revGrowthCls}">${fmtPctFraction(ratios.revenueGrowth)}</td>
+    <td>${fmtPctPlain(ratios.profitMargins)}</td>
+  `;
+  tr.addEventListener("click", () => selectHealthTicker(t.rawSymbol));
+  return tr;
+}
+
+function renderHealthOverview(tickers) {
+  const container = document.getElementById("health-overview");
+  container.innerHTML = "";
+  if (!tickers || !tickers.length) {
+    container.innerHTML = '<div class="chart-status static">No data available.</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "ticker-table";
+  table.innerHTML = `
+    <thead><tr>${HEALTH_OVERVIEW_COLUMNS.map((c) => `<th>${c}</th>`).join("")}</tr></thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  tickers.forEach((t) => {
+    const tr = renderHealthOverviewRow(t);
+    tr.classList.toggle("selected-row", t.rawSymbol === selectedHealthSymbol);
+    tbody.appendChild(tr);
+  });
+  container.appendChild(table);
+}
+
+function fmtEarningsHistoryRow(q) {
+  const surprise = fmtSurprise(q.surprisePercent);
+  return `
+    <tr>
+      <td>${q.quarter || "N/A"}</td>
+      <td>${q.epsActual == null ? "N/A" : `$${q.epsActual.toFixed(2)}`}</td>
+      <td>${q.epsEstimate == null ? "N/A" : `$${q.epsEstimate.toFixed(2)}`}</td>
+      <td class="${surprise.cls}">${surprise.text}</td>
+    </tr>
+  `;
+}
+
+function fmtEstimateRow(label, est) {
+  if (!est) return `<tr><td>${label}</td><td class="na" colspan="2">N/A</td></tr>`;
+  const epsCls = est.epsGrowth == null ? "na" : est.epsGrowth >= 0 ? "up" : "down";
+  const revCls = est.revenueGrowth == null ? "na" : est.revenueGrowth >= 0 ? "up" : "down";
+  return `
+    <tr>
+      <td>${label}</td>
+      <td class="${epsCls}">${fmtPctFraction(est.epsGrowth)} EPS</td>
+      <td class="${revCls}">${fmtPctFraction(est.revenueGrowth)} Rev</td>
+    </tr>
+  `;
+}
+
+function renderHealthDetail(t) {
+  const titleEl = document.getElementById("health-detail-title");
+  titleEl.textContent = `${t.symbol} — ${t.name}`;
+
+  const next = t.nextEarnings || {};
+  const earningsFmt = fmtDaysAway(next.date, next.isEstimate);
+  const analyst = t.analyst || {};
+  const ratios = t.ratios || {};
+  const estimates = t.estimates || {};
+  const latestRec = (analyst.trend || [])[0];
+
+  const earningsHistoryRows =
+    (t.earningsHistory || []).map(fmtEarningsHistoryRow).join("") || `<tr><td colspan="4" class="na">No data</td></tr>`;
+
+  const estimateRows = [
+    fmtEstimateRow("This quarter", estimates.currentQuarter),
+    fmtEstimateRow("Next quarter", estimates.nextQuarter),
+    fmtEstimateRow("This year", estimates.currentYear),
+    fmtEstimateRow("Next year", estimates.nextYear),
+  ].join("");
+
+  const annualRows =
+    (t.annualTrend || [])
+      .map(
+        (y) => `
+        <tr>
+          <td>${y.year || "N/A"}</td>
+          <td>${y.revenue == null ? "N/A" : fmtDollarAbbrev(y.revenue)}</td>
+          <td>${y.netIncome == null ? "N/A" : fmtDollarAbbrev(y.netIncome)}</td>
+        </tr>
+      `
+      )
+      .join("") || `<tr><td colspan="3" class="na">No data</td></tr>`;
+
+  const targetText =
+    analyst.targetMean != null
+      ? `${analyst.targetLow != null ? `$${analyst.targetLow.toFixed(0)}` : "?"} – $${analyst.targetMean.toFixed(0)} – ${
+          analyst.targetHigh != null ? `$${analyst.targetHigh.toFixed(0)}` : "?"
+        }`
+      : "N/A";
+  const upsideFmt = fmtTargetUpside(t.price, analyst.targetMean);
+  const ratingFmt = fmtRecommendationBadge(analyst.recommendationKey);
+
+  const body = document.getElementById("health-detail-body");
+  body.innerHTML = `
+    <div class="health-section">
+      <div class="health-section-title">Earnings</div>
+      <p class="health-note ${earningsFmt.cls}">Next earnings: ${earningsFmt.text}${
+    next.epsEstimate != null ? ` · EPS est. $${next.epsEstimate.toFixed(2)}` : ""
+  }${next.revenueEstimate != null ? ` · Revenue est. ${fmtDollarAbbrev(next.revenueEstimate)}` : ""}</p>
+      <table class="ticker-table">
+        <thead><tr><th>Quarter</th><th>EPS Actual</th><th>EPS Estimate</th><th>Surprise</th></tr></thead>
+        <tbody>${earningsHistoryRows}</tbody>
+      </table>
+    </div>
+
+    <div class="health-section">
+      <div class="health-section-title">Forward Estimates</div>
+      <table class="ticker-table">
+        <thead><tr><th>Period</th><th>EPS Growth</th><th>Revenue Growth</th></tr></thead>
+        <tbody>${estimateRows}</tbody>
+      </table>
+      ${
+        t.epsRevisions
+          ? `<p class="health-note">Analyst estimate revisions (last 30 days): <span class="up">${
+              t.epsRevisions.upLast30days ?? 0
+            } up</span> · <span class="down">${t.epsRevisions.downLast30days ?? 0} down</span></p>`
+          : ""
+      }
+    </div>
+
+    <div class="health-section">
+      <div class="health-section-title">Analyst View</div>
+      <div class="health-stat-grid">
+        ${statCard("Rating", `<span class="${ratingFmt.cls}">${ratingFmt.text}</span>`)}
+        ${statCard("Analysts", analyst.numberOfAnalysts ?? "N/A")}
+        ${statCard("Price Target (Low–Mean–High)", targetText)}
+        ${statCard("Upside to Mean Target", `<span class="${upsideFmt.cls}">${upsideFmt.text}</span>`)}
+      </div>
+      ${
+        latestRec
+          ? `<p class="health-note">${latestRec.strongBuy ?? 0} Strong Buy · ${latestRec.buy ?? 0} Buy · ${
+              latestRec.hold ?? 0
+            } Hold · ${latestRec.sell ?? 0} Sell · ${latestRec.strongSell ?? 0} Strong Sell</p>`
+          : ""
+      }
+    </div>
+
+    <div class="health-section">
+      <div class="health-section-title">Financial Health</div>
+      <div class="health-stat-grid">
+        ${statCard("Revenue Growth", fmtPctFraction(ratios.revenueGrowth))}
+        ${statCard("Earnings Growth", fmtPctFraction(ratios.earningsGrowth))}
+        ${statCard("Gross Margin", fmtPctPlain(ratios.grossMargins))}
+        ${statCard("Operating Margin", fmtPctPlain(ratios.operatingMargins))}
+        ${statCard("Profit Margin", fmtPctPlain(ratios.profitMargins))}
+        ${statCard("Return on Equity", fmtPctPlain(ratios.returnOnEquity))}
+        ${statCard("Return on Assets", fmtPctPlain(ratios.returnOnAssets))}
+        ${statCard("Debt / Equity", fmtPctRaw(ratios.debtToEquity))}
+        ${statCard("Current Ratio", fmtRatio(ratios.currentRatio))}
+        ${statCard("Quick Ratio", fmtRatio(ratios.quickRatio))}
+        ${statCard("Free Cash Flow", ratios.freeCashflow == null ? "N/A" : fmtDollarAbbrev(ratios.freeCashflow))}
+        ${statCard("Operating Cash Flow", ratios.operatingCashflow == null ? "N/A" : fmtDollarAbbrev(ratios.operatingCashflow))}
+        ${statCard("Total Cash", ratios.totalCash == null ? "N/A" : fmtDollarAbbrev(ratios.totalCash))}
+        ${statCard("Total Debt", ratios.totalDebt == null ? "N/A" : fmtDollarAbbrev(ratios.totalDebt))}
+      </div>
+    </div>
+
+    <div class="health-section">
+      <div class="health-section-title">Annual Trend</div>
+      <table class="ticker-table">
+        <thead><tr><th>Year</th><th>Revenue</th><th>Net Income</th></tr></thead>
+        <tbody>${annualRows}</tbody>
+      </table>
+    </div>
+
+    <div class="health-section">
+      <div class="health-section-title">News &amp; Filings</div>
+      <div id="health-news-content"><div class="chart-status static">Loading…</div></div>
+    </div>
+  `;
+}
+
+function renderHealthNewsSection(data) {
+  const content = document.getElementById("health-news-content");
+  if (!content) return; // user switched tickers before this resolved
+
+  const newsHtml = (data.newsItems || []).length
+    ? data.newsItems
         .map(
           (item) => `
         <div class="feed-item">
-          <span class="feed-ticker-badge">${item.symbol}</span>
           <div class="feed-item-main">
             <a class="feed-item-title" href="${item.link}" target="_blank" rel="noopener noreferrer">${item.title}</a>
             <div class="feed-item-meta">
-              <span class="news-category-badge ${item.category}">${item.kind === "material" ? "8-K" : item.category}</span>
-              <span>${item.name}</span>
+              <span class="news-category-badge ${item.category}">${item.category}</span>
               ${item.source ? `<span>${item.source}</span>` : ""}
-              <span>${fmtRelativeTime(item.epochMs)}</span>
             </div>
           </div>
         </div>
       `
         )
         .join("")
-    : '<div class="chart-status static">No relevant news in this window — try a longer lookback.</div>';
+    : '<div class="chart-status static">No recent news found.</div>';
 
-  const insiderRows = collectRecentInsiderActivity(tickers, cutoffMs);
-  insiderPanel.hidden = insiderRows.length === 0;
-  insiderList.innerHTML = insiderRows
-    .map(
-      (row) => `
-        <div class="news-insider-row">
-          <span class="feed-ticker-badge">${row.symbol}</span>
-          <span class="news-insider-summary">${row.name}: ${formatInsiderSummaryLine(row.summary)}</span>
-        </div>
-      `
-    )
-    .join("");
+  const materialHtml = (data.materialEvents || []).length
+    ? `<ul class="health-material-list">${data.materialEvents
+        .map((e) => `<li><a href="${e.link}" target="_blank" rel="noopener noreferrer">${e.items.join(", ")}</a> — ${e.date || ""}</li>`)
+        .join("")}</ul>`
+    : "";
+
+  const insiderHtml = data.insiderSummary
+    ? `<p class="health-note">Insider activity: ${formatInsiderSummaryLine(data.insiderSummary)}</p>`
+    : "";
+
+  content.innerHTML = `${insiderHtml}${materialHtml}<div class="news-feed">${newsHtml}</div>`;
 }
 
-async function loadNewsFeed() {
-  const feedEl = document.getElementById("news-feed");
-  const updatedEl = document.getElementById("news-updated-at");
-  feedEl.innerHTML = '<div class="chart-status static">Loading recent news across your watchlist…</div>';
+async function selectHealthTicker(rawSymbol, { scroll = true } = {}) {
+  const t = latestHealthTickers.find((x) => x.rawSymbol === rawSymbol);
+  if (!t) return;
+  selectedHealthSymbol = rawSymbol;
+
+  document.querySelectorAll("#health-overview tbody tr").forEach((tr) => {
+    tr.classList.toggle("selected-row", tr.dataset.symbol === rawSymbol);
+  });
+
+  const panel = document.getElementById("health-detail-panel");
+  panel.hidden = false;
+  renderHealthDetail(t);
+  if (scroll) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+
   try {
-    const res = await fetch("/api/news/feed", { cache: "no-store" });
+    const res = await fetch(`/api/news?symbol=${encodeURIComponent(rawSymbol)}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    newsFeedData = await res.json();
-    updatedEl.textContent = `Updated ${new Date(newsFeedData.generatedAt * 1000).toLocaleTimeString()} • ${newsFeedData.tickers.length} tickers`;
-    renderNewsFeed();
+    const data = await res.json();
+    if (selectedHealthSymbol === rawSymbol) renderHealthNewsSection(data);
   } catch (err) {
-    feedEl.innerHTML = `<div class="chart-status static">Failed to load news: ${err.message}</div>`;
+    const content = document.getElementById("health-news-content");
+    if (content) content.innerHTML = `<div class="chart-status static">Failed to load news: ${err.message}</div>`;
   }
 }
 
-function initNewsTab() {
-  document.querySelectorAll("#news-recency-toggle .recency-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      newsRecencyHours = Number(btn.dataset.hours);
-      document.querySelectorAll("#news-recency-toggle .recency-btn").forEach((b) => b.classList.toggle("active", b === btn));
-      renderNewsFeed();
-    });
-  });
-  document.getElementById("news-refresh-btn").addEventListener("click", loadNewsFeed);
-  loadNewsFeed();
+async function loadHealthOverview() {
+  const container = document.getElementById("health-overview");
+  const updatedEl = document.getElementById("health-updated-at");
+  const refreshBtn = document.getElementById("health-refresh-btn");
+  refreshBtn.disabled = true;
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    latestHealthTickers = data.tickers || [];
+    renderHealthOverview(latestHealthTickers);
+    updatedEl.textContent = `Updated ${new Date(data.updatedAt * 1000).toLocaleTimeString()}`;
+    if (selectedHealthSymbol && latestHealthTickers.some((x) => x.rawSymbol === selectedHealthSymbol)) {
+      selectHealthTicker(selectedHealthSymbol, { scroll: false });
+    }
+  } catch (err) {
+    container.innerHTML = `<div class="chart-status static">Failed to load: ${err.message}</div>`;
+  } finally {
+    refreshBtn.disabled = false;
+  }
+}
+
+function initHealthTab() {
+  document.getElementById("health-refresh-btn").addEventListener("click", loadHealthOverview);
+  loadHealthOverview();
 }
 
 function init() {
@@ -2230,7 +2445,7 @@ function init() {
   comparisonChart.init();
   initTickerAutocomplete("chart2-ticker-input", "chart2-ticker-suggestions", (symbol) => comparisonChart.selectTicker(symbol));
   initTimeseriesWindowButtons();
-  initNewsTab();
+  initHealthTab();
   document.getElementById("refresh-btn").addEventListener("click", loadQuotes);
   TICKER_SELECT_IDS.forEach((id) => {
     const select = document.getElementById(id);
@@ -2257,6 +2472,7 @@ function init() {
   setInterval(loadQuotes, REFRESH_INTERVAL_MS);
   setInterval(loadWatchlist, REFRESH_INTERVAL_MS);
   setInterval(loadReturnsTable, REFRESH_INTERVAL_MS);
+  setInterval(loadHealthOverview, REFRESH_INTERVAL_MS);
 }
 
 init();

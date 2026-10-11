@@ -21,7 +21,7 @@
     <h1>Market Pulse</h1>
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="market-pulse" role="tab" aria-selected="true">Market Pulse</button>
-      <button class="tab" data-tab="relevant-news" role="tab" aria-selected="false">Relevant News</button>
+      <button class="tab" data-tab="relevant-news" role="tab" aria-selected="false">Financial Health</button>
     </div>
   </header>
 
@@ -249,26 +249,24 @@
     </section>
 
     <section id="relevant-news" class="tab-panel">
+      <div class="section-title">
+        <span class="dot" style="background: var(--dot-green)"></span>
+        Financial health — all tickers
+      </div>
       <div class="panel-toolbar">
-        <span id="news-updated-at" class="updated-at">Loading…</span>
-        <div class="news-recency-toggle" id="news-recency-toggle">
-          <button class="recency-btn" data-hours="24">Last 24h</button>
-          <button class="recency-btn active" data-hours="72">Last 3 days</button>
-          <button class="recency-btn" data-hours="168">Last 7 days</button>
-        </div>
-        <button id="news-refresh-btn" class="refresh-btn">Refresh</button>
+        <span id="health-updated-at" class="updated-at">Loading…</span>
+        <button id="health-refresh-btn" class="refresh-btn">Refresh</button>
+      </div>
+      <div id="health-overview" class="table-wrap">
+        <div class="chart-status static">Loading…</div>
       </div>
 
-      <div class="panel heatmap-panel" id="news-insider-panel" hidden>
+      <div class="panel" id="health-detail-panel" hidden>
         <div class="panel-header">
-          <span class="dot" style="background: var(--dot-green)"></span>
-          Recent insider activity
+          <span class="dot" id="health-detail-dot" style="background: var(--blue)"></span>
+          <span id="health-detail-title">Select a ticker above</span>
         </div>
-        <div id="news-insider-list" class="news-insider-list"></div>
-      </div>
-
-      <div id="news-feed" class="news-feed">
-        <div class="chart-status static">Loading recent news across your watchlist…</div>
+        <div id="health-detail-body" class="health-detail-body"></div>
       </div>
     </section>
   </main>

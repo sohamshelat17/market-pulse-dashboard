@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import constituents
+import financials
 import news
 import watchlist
 
@@ -647,6 +648,48 @@ def build_returns_response():
 
 
 # ---------------------------------------------------------------------------
+# Financial health (earnings, estimates, analyst view, balance-sheet/cash-
+# flow ratios) per watchlist ticker -- see financials.py for the fetch/parse
+# side of this.
+# ---------------------------------------------------------------------------
+
+HEALTH_TTL_SECONDS = 4 * 3600  # earnings/estimates/analyst data barely moves intraday
+
+
+def fetch_all_health():
+    symbols = [t["symbol"] for t in watchlist.WATCHLIST_TICKERS]
+    return financials.fetch_all_health(symbols, lambda u: fetch_json(u, authed=True))
+
+
+def build_health_response():
+    prices = watchlist_price_cache.get()
+    health = health_cache.get()
+
+    tickers_out = []
+    for t in watchlist.WATCHLIST_TICKERS:
+        symbol = t["symbol"]
+        p = prices.get(symbol) or {}
+        h = health.get(symbol) or {}
+        tickers_out.append(
+            {
+                "symbol": t.get("label", symbol),
+                "rawSymbol": symbol,
+                "name": t["name"],
+                "price": p.get("price"),
+                "changePercent": p.get("changePercent"),
+                "earningsHistory": h.get("earningsHistory", []),
+                "nextEarnings": h.get("nextEarnings"),
+                "estimates": h.get("estimates"),
+                "epsRevisions": h.get("epsRevisions"),
+                "analyst": h.get("analyst"),
+                "ratios": h.get("ratios"),
+                "annualTrend": h.get("annualTrend", []),
+            }
+        )
+    return {"tickers": tickers_out, "updatedAt": time.time()}
+
+
+# ---------------------------------------------------------------------------
 # Caches
 # ---------------------------------------------------------------------------
 
@@ -697,6 +740,7 @@ stats_cache = Cache(STATS_TTL_SECONDS, fetch_all_stats)
 watchlist_price_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_prices)
 watchlist_ath_cache = Cache(ATH_TTL_SECONDS, watchlist.fetch_watchlist_aths)
 historical_returns_cache = Cache(RETURNS_TTL_SECONDS, fetch_all_historical_returns)
+health_cache = Cache(HEALTH_TTL_SECONDS, fetch_all_health)
 
 # Kick off the first population of every cache the moment the process
 # starts, instead of waiting for the first real request to trigger it --
@@ -705,7 +749,7 @@ historical_returns_cache = Cache(RETURNS_TTL_SECONDS, fetch_all_historical_retur
 # Render still takes to finish spinning up the dyno and route the first
 # visitor's request in, rather than only starting the clock once that
 # request actually arrives.
-for _cache in (price_cache, stats_cache, watchlist_price_cache, watchlist_ath_cache, historical_returns_cache):
+for _cache in (price_cache, stats_cache, watchlist_price_cache, watchlist_ath_cache, historical_returns_cache, health_cache):
     _cache.get()
 
 _history_cache = {}
@@ -791,32 +835,6 @@ def get_news(raw_symbol):
     return data
 
 
-def fetch_news_feed():
-    """News + material events + insider summary for every watchlist ticker,
-    fetched in parallel. Each ticker's result is still cached individually
-    via get_news()'s own TTL, so repeat feed loads within that window are
-    fast even though this itself has no separate cache."""
-    tickers = []
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {pool.submit(get_news, t["symbol"]): t for t in watchlist.WATCHLIST_TICKERS}
-        for future, meta in futures.items():
-            try:
-                tickers.append(future.result())
-            except Exception as exc:  # noqa: BLE001
-                tickers.append(
-                    {
-                        "symbol": meta.get("label", meta["symbol"]),
-                        "rawSymbol": meta["symbol"],
-                        "name": meta["name"],
-                        "newsItems": [],
-                        "materialEvents": [],
-                        "insiderSummary": None,
-                        "error": str(exc),
-                    }
-                )
-    return {"tickers": tickers, "generatedAt": time.time()}
-
-
 def build_quotes_response():
     prices = price_cache.get()
     stats = stats_cache.get()
@@ -878,10 +896,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_watchlist()
         elif parsed.path == "/api/returns":
             self._handle_returns()
+        elif parsed.path == "/api/health":
+            self._handle_health()
         elif parsed.path == "/api/news":
             self._handle_news(parse_qs(parsed.query))
-        elif parsed.path == "/api/news/feed":
-            self._handle_news_feed()
         elif parsed.path == "/api/symbol-search":
             self._handle_symbol_search(parse_qs(parsed.query))
         else:
@@ -908,6 +926,14 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_returns(self):
         try:
             data = build_returns_response()
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=502)
+            return
+        self._send_json(data)
+
+    def _handle_health(self):
+        try:
+            data = build_health_response()
         except Exception as exc:  # noqa: BLE001
             self._send_json({"error": str(exc)}, status=502)
             return
@@ -941,14 +967,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc)}, status=502)
             return
         self._send_json({"results": results})
-
-    def _handle_news_feed(self):
-        try:
-            data = fetch_news_feed()
-        except Exception as exc:  # noqa: BLE001
-            self._send_json({"error": str(exc)}, status=502)
-            return
-        self._send_json(data)
 
     def _handle_history(self, query):
         symbols = query.get("symbol")
