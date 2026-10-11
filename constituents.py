@@ -59,7 +59,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 REQUEST_TIMEOUT = 15
 CONSTITUENT_CAP = 75
 
-SPDR_TICKERS = {"SPY", "XLV", "XLP", "XLY", "XLU", "XLC", "XLF", "XLE", "XLB", "XLI"}
+SPDR_TICKERS = {"SPY", "XLV", "XLP", "XLY", "XLU", "XLC", "XLF", "XLE", "XLB", "XLI", "XSD", "XBI", "XHB"}
 
 ISHARES_PRODUCT_IDS = {
     "EWZ": 239612,
@@ -70,10 +70,13 @@ ISHARES_PRODUCT_IDS = {
     "IEMG": 244050,
     "IWM": 239710,
     "IGV": 239771,
+    "SOXX": 239705,
+    "ITA": 239502,
+    "IBB": 239699,
 }
 
 VANGUARD_TICKERS = {"VNQ", "VGK", "VEA"}
-INVESCO_TICKERS = {"QQQ", "RSP"}
+INVESCO_TICKERS = {"QQQ", "RSP", "PSI"}
 
 # Best-effort country -> Yahoo ticker suffix, used when a constituent's raw
 # symbol from a provider (e.g. iShares) doesn't include an exchange suffix.
@@ -375,7 +378,7 @@ def fetch_invesco_holdings(ticker):
 # the requested ticker, so one fixed pair works for the whole fund lineup.
 # ---------------------------------------------------------------------------
 
-VANECK_TICKERS = {"SMH", "NLR"}
+VANECK_TICKERS = {"SMH", "NLR", "REMX"}
 
 
 def fetch_vaneck_holdings(ticker):
@@ -488,7 +491,7 @@ def fetch_corgi_holdings(ticker):
 # id/class attribute that could change without notice.
 # ---------------------------------------------------------------------------
 
-FIRST_TRUST_TICKERS = {"CIBR"}
+FIRST_TRUST_TICKERS = {"CIBR", "SKYY", "GRID", "QCLN"}
 
 
 def fetch_first_trust_holdings(ticker):
@@ -559,7 +562,7 @@ def fetch_coinshares_holdings(ticker):
 # so that page is fetched fresh each call to find the current link.
 # ---------------------------------------------------------------------------
 
-GLOBALX_TICKERS = {"DTCR", "BOTZ"}
+GLOBALX_TICKERS = {"DTCR", "BOTZ", "PAVE", "COPX"}
 
 
 def fetch_globalx_holdings(ticker):
@@ -598,6 +601,9 @@ def fetch_globalx_holdings(ticker):
 
 ARK_HOLDINGS_URLS = {
     "ARKX": "https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_SPACE_%26_DEFENSE_INNOVATION_ETF_ARKX_HOLDINGS.csv",
+    "ARKF": "https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_FINTECH_INNOVATION_ETF_ARKF_HOLDINGS.csv",
+    "ARKG": "https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_GENOMIC_REVOLUTION_ETF_ARKG_HOLDINGS.csv",
+    "ARKQ": "https://assets.ark-funds.com/fund-documents/funds-etf-csv/ARK_AUTONOMOUS_TECH._%26_ROBOTICS_ETF_ARKQ_HOLDINGS.csv",
 }
 ARK_TICKERS = set(ARK_HOLDINGS_URLS)
 
@@ -707,13 +713,21 @@ def fetch_constituents_raw(ticker):
     raise ValueError(f"No constituents source for {ticker}")
 
 
+NO_HOLDINGS_REASONS = {
+    "VIX": "VIX is an index, not a fund — it has no constituents.",
+    "GLD": "GLD holds physical gold bullion, not a basket of stocks — it has no constituents.",
+    "SLV": "SLV holds physical silver bullion, not a basket of stocks — it has no constituents.",
+    "BITO": "BITO holds bitcoin futures contracts, not a basket of stocks — it has no constituents.",
+}
+
+
 def fetch_constituents_payload(ticker):
     bare_symbol = ticker.lstrip("^")
-    if bare_symbol == "VIX":
+    if bare_symbol in NO_HOLDINGS_REASONS:
         return {
             "ticker": bare_symbol,
             "unsupported": True,
-            "reason": "VIX is an index, not a fund — it has no constituents.",
+            "reason": NO_HOLDINGS_REASONS[bare_symbol],
         }
 
     if ticker not in ALL_CONSTITUENT_TICKERS:

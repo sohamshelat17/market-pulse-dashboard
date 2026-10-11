@@ -379,7 +379,7 @@ def fetch_price(symbol):
 
 def fetch_all_prices():
     quotes = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(fetch_price, s): s for s in ALL_SYMBOLS}
         for future, symbol in futures.items():
             try:
@@ -438,7 +438,7 @@ def fetch_stats_one(symbol):
 
 def fetch_all_stats():
     stats = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(fetch_stats_one, s): s for s in ALL_SYMBOLS}
         for future, symbol in futures.items():
             stats[symbol] = future.result()
@@ -591,7 +591,7 @@ def fetch_ticker_historical_returns(symbol):
 
 def fetch_all_historical_returns():
     results = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(fetch_ticker_historical_returns, s): s for s in ALL_SYMBOLS}
         for future, symbol in futures.items():
             try:
@@ -652,31 +652,27 @@ def build_returns_response():
 
 
 class Cache:
-    """TTL cache that serves the last-known-good value immediately once
-    it has one, refreshing in a background thread rather than blocking
-    the caller -- Yahoo's endpoints have occasionally gone slow/unresponsive
-    enough from this host's IP that a request-blocking refresh could hang
-    an HTTP request for minutes. Only the very first load (no data yet)
-    blocks, since there's nothing to serve in the meantime."""
+    """TTL cache that never blocks the caller, not even on the very first
+    call -- it serves the last-known-good value (or an empty placeholder
+    before the first load has ever finished) while refreshing in a
+    background thread. Yahoo's endpoints have occasionally gone slow/
+    unresponsive enough from this host's IP that a request-blocking
+    refresh could hang an HTTP request for minutes; the frontend's own
+    30s auto-refresh picks up real data as soon as a background load
+    actually finishes, so there's no reason to ever make a request wait."""
 
-    def __init__(self, ttl, loader):
+    def __init__(self, ttl, loader, initial=None):
         self._ttl = ttl
         self._loader = loader
-        self._data = None
+        self._data = {} if initial is None else initial
         self._ts = 0.0
         self._lock = threading.Lock()
         self._refreshing = False
 
     def get(self):
         with self._lock:
-            now = time.time()
-            is_stale = self._data is None or (now - self._ts) > self._ttl
+            is_stale = (time.time() - self._ts) > self._ttl
             if not is_stale or self._refreshing:
-                return self._data
-            if self._data is None:
-                # Nothing to serve yet -- this first load has to block.
-                self._data = self._loader()
-                self._ts = time.time()
                 return self._data
             self._refreshing = True
 
@@ -701,6 +697,16 @@ stats_cache = Cache(STATS_TTL_SECONDS, fetch_all_stats)
 watchlist_price_cache = Cache(PRICE_TTL_SECONDS, watchlist.fetch_watchlist_prices)
 watchlist_ath_cache = Cache(ATH_TTL_SECONDS, watchlist.fetch_watchlist_aths)
 historical_returns_cache = Cache(RETURNS_TTL_SECONDS, fetch_all_historical_returns)
+
+# Kick off the first population of every cache the moment the process
+# starts, instead of waiting for the first real request to trigger it --
+# Cache.get() never blocks, so this just starts the background loads
+# immediately and returns. That overlaps cache warm-up with however long
+# Render still takes to finish spinning up the dyno and route the first
+# visitor's request in, rather than only starting the clock once that
+# request actually arrives.
+for _cache in (price_cache, stats_cache, watchlist_price_cache, watchlist_ath_cache, historical_returns_cache):
+    _cache.get()
 
 _history_cache = {}
 _history_lock = threading.Lock()
