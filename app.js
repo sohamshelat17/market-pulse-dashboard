@@ -1,7 +1,20 @@
 const REFRESH_INTERVAL_MS = 30000;
 
 // Display order for ticker groups (tables + overview heatmap alike).
-const GROUP_ORDER = ["US Benchmarks", "US Sectors", "Global Markets", "Thematic Trends"];
+const GROUP_ORDER = [
+  "US Benchmarks",
+  "US Sectors",
+  "Global Markets",
+  "Semis & Chips",
+  "Software & Cyber",
+  "Power & Infrastructure",
+  "Crypto & Fintech",
+  "Aerospace & Space",
+  "Robotics & Automation",
+  "Real Assets",
+  "Health & Biotech",
+  "Quantum Computing",
+];
 
 const RANGE_OPTIONS = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y", "ALL"];
 const DEFAULT_RANGE = "1M";
@@ -113,10 +126,16 @@ function getWeekKey(date) {
 // Ticker tables
 // ---------------------------------------------------------------------------
 
+function fmtEmaBullish(value) {
+  if (value === null || value === undefined) return { text: "N/A", cls: "na" };
+  return value ? { text: "True", cls: "up" } : { text: "False", cls: "down" };
+}
+
 function renderRow(ticker) {
   const hasPrice = ticker.price !== null && ticker.price !== undefined;
   const dirClass = hasPrice ? (ticker.change >= 0 ? "up" : "down") : "na";
   const rsi = fmtRsi(ticker.rsi14);
+  const flag = fmtEmaBullish(ticker.emaBullish);
 
   const tr = document.createElement("tr");
   tr.dataset.symbol = ticker.rawSymbol;
@@ -127,7 +146,9 @@ function renderRow(ticker) {
     <td class="${dirClass}">${fmtChange(ticker.change)}</td>
     <td class="${dirClass}">${fmtPercent(ticker.changePercent)}</td>
     <td class="${ticker.pe == null ? "na" : ""}">${fmtRatio(ticker.pe)}</td>
+    <td class="${ticker.ema8 == null ? "na" : ""}">${ticker.ema8 == null ? "N/A" : `$${ticker.ema8.toFixed(2)}`}</td>
     <td class="${ticker.ema21 == null ? "na" : ""}">${ticker.ema21 == null ? "N/A" : `$${ticker.ema21.toFixed(2)}`}</td>
+    <td class="${flag.cls}">${flag.text}</td>
     <td class="${rsi.cls || (ticker.rsi14 == null ? "na" : "")}">${rsi.text}</td>
     <td class="${ticker.todayVolume == null ? "na" : ""}">${fmtVolume(ticker.todayVolume)}</td>
     <td class="${ticker.avgVolume == null ? "na" : ""}">${fmtVolume(ticker.avgVolume)}</td>
@@ -159,51 +180,69 @@ function fmtReturn(pct) {
   return { text: `${sign}${pct.toFixed(1)}%`, cls };
 }
 
+function renderReturnsPanel(group) {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+
+  const header = document.createElement("div");
+  header.className = "panel-header";
+  header.dataset.accent = group.accent;
+  header.innerHTML = `<span class="dot"></span>${group.group}`;
+  panel.appendChild(header);
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+
+  const table = document.createElement("table");
+  table.className = "ticker-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Name</th>
+        ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  group.tickers.forEach((ticker) => {
+    const cells = RETURN_COLUMNS.map((col) => {
+      const { text, cls } = fmtReturn(ticker.returns[col.key]);
+      return `<td class="${cls}">${text}</td>`;
+    }).join("");
+    const tr = document.createElement("tr");
+    tr.dataset.symbol = ticker.rawSymbol;
+    tr.innerHTML = `
+      <td><span class="ticker-badge">${ticker.symbol}</span></td>
+      <td class="name-cell">${ticker.name}</td>
+      ${cells}
+    `;
+    tr.addEventListener("click", () => selectPrimaryTicker(ticker.rawSymbol));
+    tbody.appendChild(tr);
+  });
+
+  wrap.appendChild(table);
+  panel.appendChild(wrap);
+  return panel;
+}
+
 function renderReturnsTable(groups) {
   const container = document.getElementById("returns-table");
+  container.innerHTML = "";
   if (!groups || !groups.length) {
     container.innerHTML = '<div class="chart-status static">No return data available.</div>';
     return;
   }
 
-  // Repeated (rather than sticky) per-group header row: the table lives
-  // inside .panel, which uses overflow:hidden for rounded-corner clipping
-  // and defeats position:sticky no matter which ancestor owns the scroll,
-  // so instead every group gets its own header row scrolled in with it.
-  const headerRowHtml = `
-    <tr class="table-header-row">
-      <th>Ticker</th>
-      <th>Name</th>
-      ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
-    </tr>
-  `;
-
-  const rowsHtml = [];
+  // One panel per group, same pattern as the ticker-details tables above --
+  // keeps every group short enough to need no internal scrolling, so each
+  // table's own header just stays in view naturally.
+  const groupByName = new Map(groups.map((g) => [g.group, g]));
   GROUP_ORDER.forEach((name) => {
-    const group = groups.find((g) => g.group === name);
-    if (!group) return;
-    rowsHtml.push(headerRowHtml);
-    rowsHtml.push(`<tr class="table-group-row"><td colspan="${2 + RETURN_COLUMNS.length}">${name}</td></tr>`);
-    group.tickers.forEach((ticker) => {
-      const cells = RETURN_COLUMNS.map((col) => {
-        const { text, cls } = fmtReturn(ticker.returns[col.key]);
-        return `<td class="${cls}">${text}</td>`;
-      }).join("");
-      rowsHtml.push(`
-        <tr>
-          <td><span class="ticker-badge">${ticker.symbol}</span></td>
-          <td class="name-cell">${ticker.name}</td>
-          ${cells}
-        </tr>
-      `);
-    });
+    const group = groupByName.get(name);
+    if (group) container.appendChild(renderReturnsPanel(group));
   });
-
-  container.innerHTML = `
-    <table class="ticker-table returns-table">
-      <tbody>${rowsHtml.join("")}</tbody>
-    </table>
-  `;
 }
 
 async function loadReturnsTable() {
@@ -242,7 +281,9 @@ function renderPanel(group) {
         <th>Chg</th>
         <th>Chg %</th>
         <th>P/E</th>
+        <th>8 EMA</th>
         <th>21 EMA</th>
+        <th>8/21 Flag</th>
         <th>RSI (14)</th>
         <th>Volume</th>
         <th>Avg Vol</th>

@@ -722,42 +722,26 @@ body {
 .panel-header[data-accent="green"] .dot { background: var(--dot-green); }
 .panel-header[data-accent="amber"] .dot { background: var(--amber); }
 
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
 .table-wrap {
   overflow-x: auto;
-  /* overflow-x alone implicitly computes overflow-y to auto too, which
-     makes this element its own scrolling container and breaks a sticky
-     descendant's positioning relative to the actual page viewport --
-     force it back to visible so vertical stickiness (the returns table's
-     header) tracks the page, not this element's own (unused) scrollport. */
-  overflow-y: visible;
 }
 
 table.ticker-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
-}
-
-/* Bounded, independently-scrolling region so long ticker lists don't push
-   the rest of the page down endlessly. */
-#returns-table {
-  max-height: 640px;
-  overflow-y: auto;
-}
-
-.returns-table .table-header-row th {
-  background: var(--panel-bg);
-}
-
-.returns-table .table-group-row td {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.02);
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--panel-border);
 }
 
 .ticker-table th {

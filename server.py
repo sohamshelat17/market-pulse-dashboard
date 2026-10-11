@@ -95,6 +95,8 @@ TICKER_GROUPS = [
             {"symbol": "XLB", "name": "Materials"},
             {"symbol": "XLI", "name": "Industrials"},
             {"symbol": "VNQ", "name": "Real estate"},
+            {"symbol": "XHB", "name": "Homebuilders"},
+            {"symbol": "JETS", "name": "Airlines"},
         ],
     },
     {
@@ -112,20 +114,90 @@ TICKER_GROUPS = [
         ],
     },
     {
-        "group": "Thematic Trends",
-        "accent": "amber",
+        "group": "Semis & Chips",
+        "accent": "blue",
         "tickers": [
             {"symbol": "SMH", "name": "Semiconductors"},
+            {"symbol": "SOXX", "name": "Semis (broad)"},
+            {"symbol": "XSD", "name": "Semis (equal-wt)"},
+            {"symbol": "PSI", "name": "Semiconductors"},
             {"symbol": "DRAM", "name": "Memory"},
             {"symbol": "EUV", "name": "Photonics"},
+        ],
+    },
+    {
+        "group": "Software & Cyber",
+        "accent": "violet",
+        "tickers": [
             {"symbol": "IGV", "name": "Software"},
             {"symbol": "CIBR", "name": "Cybersecurity"},
-            {"symbol": "WGMI", "name": "HPC"},
-            {"symbol": "DTCR", "name": "Data centers"},
-            {"symbol": "BOTZ", "name": "Robotics"},
-            {"symbol": "ARKX", "name": "Space"},
+            {"symbol": "HACK", "name": "Cyber (broad)"},
+            {"symbol": "SKYY", "name": "Cloud software"},
+        ],
+    },
+    {
+        "group": "Power & Infrastructure",
+        "accent": "green",
+        "tickers": [
             {"symbol": "NLR", "name": "Nuclear"},
-            {"symbol": "QTUM", "name": "Quantum"},
+            {"symbol": "GRID", "name": "Smart grid"},
+            {"symbol": "PAVE", "name": "Infrastructure"},
+            {"symbol": "DTCR", "name": "Data centers"},
+            {"symbol": "QCLN", "name": "Clean energy"},
+        ],
+    },
+    {
+        "group": "Crypto & Fintech",
+        "accent": "amber",
+        "tickers": [
+            {"symbol": "WGMI", "name": "Bitcoin miners"},
+            {"symbol": "ARKF", "name": "Fintech"},
+            {"symbol": "BITO", "name": "Bitcoin"},
+            {"symbol": "BLOK", "name": "Blockchain"},
+        ],
+    },
+    {
+        "group": "Aerospace & Space",
+        "accent": "blue",
+        "tickers": [
+            {"symbol": "ARKX", "name": "Space"},
+            {"symbol": "ITA", "name": "Aerospace/defense"},
+            {"symbol": "UFO", "name": "Space"},
+        ],
+    },
+    {
+        "group": "Robotics & Automation",
+        "accent": "violet",
+        "tickers": [
+            {"symbol": "BOTZ", "name": "Robotics"},
+            {"symbol": "ROBO", "name": "Automation"},
+            {"symbol": "ARKQ", "name": "AI & robotics"},
+        ],
+    },
+    {
+        "group": "Real Assets",
+        "accent": "green",
+        "tickers": [
+            {"symbol": "GLD", "name": "Gold"},
+            {"symbol": "SLV", "name": "Silver"},
+            {"symbol": "COPX", "name": "Copper miners"},
+            {"symbol": "REMX", "name": "Critical minerals"},
+        ],
+    },
+    {
+        "group": "Health & Biotech",
+        "accent": "amber",
+        "tickers": [
+            {"symbol": "XBI", "name": "Biotech (equal-wt)"},
+            {"symbol": "IBB", "name": "Biotech (broad)"},
+            {"symbol": "ARKG", "name": "Genomics"},
+        ],
+    },
+    {
+        "group": "Quantum Computing",
+        "accent": "blue",
+        "tickers": [
+            {"symbol": "QTUM", "name": "Quantum computing"},
         ],
     },
 ]
@@ -342,13 +414,17 @@ def fetch_fundamentals(symbol):
 
 def fetch_indicators(symbol):
     _, closes, _ = fetch_series(symbol, {"interval": "1d", "range": "6mo"})
+    ema8 = last_valid(compute_ema(closes, 8))
     ema21 = last_valid(compute_ema(closes, 21))
     rsi14 = last_valid(compute_rsi(closes, 14))
-    return {"ema21": ema21, "rsi14": rsi14}
+    # "8/21 flag" -- bullish (8 EMA above 21 EMA) vs bearish, as a plain
+    # current-state comparison rather than a same-day-crossover event.
+    ema_bullish = ema8 > ema21 if (ema8 is not None and ema21 is not None) else None
+    return {"ema8": ema8, "ema21": ema21, "rsi14": rsi14, "emaBullish": ema_bullish}
 
 
 def fetch_stats_one(symbol):
-    stats = {"pe": None, "todayVolume": None, "avgVolume": None, "ema21": None, "rsi14": None}
+    stats = {"pe": None, "todayVolume": None, "avgVolume": None, "ema8": None, "ema21": None, "rsi14": None, "emaBullish": None}
     try:
         stats.update(fetch_fundamentals(symbol))
     except Exception as exc:  # noqa: BLE001
@@ -755,7 +831,9 @@ def build_quotes_response():
                     "change": p.get("change"),
                     "changePercent": p.get("changePercent"),
                     "pe": s.get("pe"),
+                    "ema8": s.get("ema8"),
                     "ema21": s.get("ema21"),
+                    "emaBullish": s.get("emaBullish"),
                     "rsi14": s.get("rsi14"),
                     "todayVolume": s.get("todayVolume"),
                     "avgVolume": s.get("avgVolume"),
