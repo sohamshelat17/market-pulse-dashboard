@@ -1,9 +1,17 @@
 """Per-ticker financial-health snapshot for the watchlist -- earnings
-history, forward estimates, analyst view, and balance-sheet/cash-flow
-health ratios, all from one extra authed Yahoo quoteSummary call per
-ticker (same auth mechanism server.py already uses for P/E). Fetched in
-parallel across the whole watchlist and cached for hours in server.py,
-since none of this moves intraday the way a price does.
+history, forward estimates, revenue/profit QoQ and YoY growth, and
+balance-sheet/cash-flow health ratios, all from one extra authed Yahoo
+quoteSummary call per ticker (same auth mechanism server.py already
+uses for P/E). Fetched in parallel across the whole watchlist and
+cached for hours in server.py, since none of this moves intraday the
+way a price does.
+
+QoQ growth is computed here from the two most recent quarters in
+incomeStatementHistoryQuarterly (Yahoo only exposes 4 trailing
+quarters, not enough to also derive a same-quarter-last-year figure).
+YoY growth instead comes straight from financialData's own
+revenueGrowth/earningsGrowth, which Yahoo already computes against the
+year-ago quarter.
 
 A non-equity holding in the watchlist (e.g. a gold trust) simply comes
 back with most of these modules empty rather than an error -- every
@@ -15,7 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-HEALTH_MODULES = "earningsHistory,earningsTrend,calendarEvents,financialData,recommendationTrend,incomeStatementHistory"
+HEALTH_MODULES = "earningsHistory,earningsTrend,calendarEvents,financialData,incomeStatementHistory,incomeStatementHistoryQuarterly"
+
+
+def _pct_change(current, previous):
+    if current is None or not previous:
+        return None
+    return (current - previous) / abs(previous)
 
 
 def _raw(section, key):
@@ -62,17 +76,6 @@ def fetch_health_one(symbol, fetch_json_authed):
     current_q_revisions = trend_by_period.get("0q", {}).get("epsRevisions", {})
 
     fd = result.get("financialData", {})
-    rec_trend = [
-        {
-            "period": t.get("period"),
-            "strongBuy": t.get("strongBuy"),
-            "buy": t.get("buy"),
-            "hold": t.get("hold"),
-            "sell": t.get("sell"),
-            "strongSell": t.get("strongSell"),
-        }
-        for t in result.get("recommendationTrend", {}).get("trend", [])
-    ]
 
     income_hist = result.get("incomeStatementHistory", {}).get("incomeStatementHistory", [])
     annual_trend = [
@@ -84,6 +87,18 @@ def fetch_health_one(symbol, fetch_json_authed):
         for h in income_hist
     ]
     annual_trend.reverse()  # oldest -> newest
+
+    # Most recent two quarters only -- enough for a QoQ comparison; Yahoo's
+    # own financialData growth figures (below) cover YoY instead.
+    quarterly_hist = result.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
+    latest_q = quarterly_hist[0] if quarterly_hist else {}
+    prior_q = quarterly_hist[1] if len(quarterly_hist) > 1 else {}
+    latest_revenue = _raw(latest_q, "totalRevenue")
+    latest_net_income = _raw(latest_q, "netIncome")
+    prior_revenue = _raw(prior_q, "totalRevenue")
+    prior_net_income = _raw(prior_q, "netIncome")
+    net_margin = (latest_net_income / latest_revenue) if (latest_net_income is not None and latest_revenue) else None
+    prior_net_margin = (prior_net_income / prior_revenue) if (prior_net_income is not None and prior_revenue) else None
 
     return {
         "earningsHistory": earnings_history,
@@ -98,22 +113,15 @@ def fetch_health_one(symbol, fetch_json_authed):
             "upLast30days": _raw(current_q_revisions, "upLast30days"),
             "downLast30days": _raw(current_q_revisions, "downLast30days"),
         },
-        "analyst": {
-            "recommendationKey": fd.get("recommendationKey"),
-            "recommendationMean": _raw(fd, "recommendationMean"),
-            "numberOfAnalysts": _raw(fd, "numberOfAnalystOpinions"),
-            "targetLow": _raw(fd, "targetLowPrice"),
-            "targetMean": _raw(fd, "targetMeanPrice"),
-            "targetMedian": _raw(fd, "targetMedianPrice"),
-            "targetHigh": _raw(fd, "targetHighPrice"),
-            "trend": rec_trend,
-        },
         "ratios": {
-            "revenueGrowth": _raw(fd, "revenueGrowth"),
-            "earningsGrowth": _raw(fd, "earningsGrowth"),
+            "revenueGrowthYoY": _raw(fd, "revenueGrowth"),
+            "revenueGrowthQoQ": _pct_change(latest_revenue, prior_revenue),
+            "netIncomeGrowthYoY": _raw(fd, "earningsGrowth"),
+            "netIncomeGrowthQoQ": _pct_change(latest_net_income, prior_net_income),
+            "netMargin": net_margin,
+            "netMarginChangeQoQ": (net_margin - prior_net_margin) if (net_margin is not None and prior_net_margin is not None) else None,
             "grossMargins": _raw(fd, "grossMargins"),
             "operatingMargins": _raw(fd, "operatingMargins"),
-            "profitMargins": _raw(fd, "profitMargins"),
             "returnOnEquity": _raw(fd, "returnOnEquity"),
             "returnOnAssets": _raw(fd, "returnOnAssets"),
             "debtToEquity": _raw(fd, "debtToEquity"),

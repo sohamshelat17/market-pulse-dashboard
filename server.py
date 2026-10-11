@@ -681,7 +681,6 @@ def build_health_response():
                 "nextEarnings": h.get("nextEarnings"),
                 "estimates": h.get("estimates"),
                 "epsRevisions": h.get("epsRevisions"),
-                "analyst": h.get("analyst"),
                 "ratios": h.get("ratios"),
                 "annualTrend": h.get("annualTrend", []),
             }

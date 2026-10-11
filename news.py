@@ -153,8 +153,34 @@ MATERIAL_EVENT_KEYWORDS = [
 ]
 
 
+# Routine "we reported our quarterly/annual results" announcements are now
+# redundant with the dedicated Earnings section elsewhere in the app, so
+# they're excluded here outright -- even from a trusted source or a genuine
+# MATERIAL_EVENT_KEYWORDS match -- since this feed exists to surface what
+# that view doesn't cover (M&A, litigation, leadership changes, guidance
+# revisions, regulatory action, etc.), not another copy of the results.
+EARNINGS_REPORT_TITLE_PATTERNS = [
+    re.compile(
+        r"\b(reports?|posts?|announces?|delivers?)\b.{0,40}\b(q[1-4]|first|second|third|fourth)[\s-]?quarter\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(reports?|posts?|announces?|delivers?)\b.{0,40}\b(full[\s-]year|fiscal\s+(year\s+)?\d{4}|annual)\b.{0,30}\b(results?|earnings)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bearnings (call|release|report)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(beats?|misses?|tops?|falls? short of)\b.{0,30}\b(earnings|eps|revenue|estimates?|expectations|forecasts?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bq[1-4]\s+(20\d\d\s+)?(earnings|results)\b", re.IGNORECASE),
+]
+
+
 def _passes_material_filter(title, source):
     if any(p.search(title) for p in NOISY_TITLE_PATTERNS):
+        return False
+    if any(p.search(title) for p in EARNINGS_REPORT_TITLE_PATTERNS):
         return False
     source_lower = (source or "").lower()
     if any(k in source_lower for k in BLOCKED_SOURCE_KEYWORDS):
@@ -295,10 +321,20 @@ def _parse_8k_item_codes(items_desc):
     return re.findall(r"\d\.\d{2}", items_desc or "")
 
 
+# A filing whose only items are 2.02 (quarterly/annual results) and/or 9.01
+# (the exhibits that almost always just accompany a 2.02 filing) is the
+# routine "we reported earnings" 8-K -- redundant with the dedicated
+# Earnings section elsewhere in the app, so it's dropped here. An 8-K that
+# ALSO carries another item code (an acquisition, an executive departure,
+# etc. announced alongside earnings) still comes through.
+EARNINGS_ONLY_8K_CODES = {"2.02", "9.01"}
+
+
 def fetch_material_events(symbol):
     """SEC Form 8-K filings -- these ARE material corporate events by
     regulatory definition (that's the entire purpose of the form), so no
-    noise filtering is needed here the way it is for Google News."""
+    noise filtering is needed here the way it is for Google News, beyond
+    dropping the routine earnings-release filings (see above)."""
     cik = get_cik_map().get(symbol.upper())
     if not cik:
         return []
@@ -316,6 +352,8 @@ def fetch_material_events(symbol):
     for entry in root.findall(".//a:entry", ATOM_NS):
         items_desc = entry.findtext("a:content/a:items-desc", namespaces=ATOM_NS) or ""
         codes = _parse_8k_item_codes(items_desc)
+        if codes and set(codes) <= EARNINGS_ONLY_8K_CODES:
+            continue
         labels = [EIGHT_K_ITEM_LABELS.get(c, c) for c in codes] or ["Current report"]
         events.append(
             {

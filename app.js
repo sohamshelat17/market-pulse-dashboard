@@ -2109,20 +2109,6 @@ function fmtSurprise(pct) {
   return { text: `${sign}${(pct * 100).toFixed(1)}%`, cls };
 }
 
-function fmtRecommendationBadge(key) {
-  if (!key || key === "none") return { text: "N/A", cls: "na" };
-  const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  const cls = key.includes("buy") ? "up" : key.includes("sell") ? "down" : "";
-  return { text: label, cls };
-}
-
-function fmtTargetUpside(price, targetMean) {
-  if (price == null || targetMean == null) return { text: "N/A", cls: "na" };
-  const pct = ((targetMean - price) / price) * 100;
-  const sign = pct >= 0 ? "+" : "";
-  return { text: `${sign}${pct.toFixed(1)}%`, cls: pct >= 0 ? "up" : "down" };
-}
-
 function fmtPctFraction(value, digits = 1) {
   if (value === null || value === undefined) return "N/A";
   const sign = value > 0 ? "+" : "";
@@ -2139,6 +2125,16 @@ function fmtPctRaw(value, digits = 1) {
   return `${value.toFixed(digits)}%`;
 }
 
+function fmtPctPointChange(value, digits = 1) {
+  if (value === null || value === undefined) return "N/A";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${(value * 100).toFixed(digits)}pp`;
+}
+
+function growthCls(value) {
+  return value == null ? "na" : value >= 0 ? "up" : "down";
+}
+
 function statCard(label, value) {
   return `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
 }
@@ -2147,24 +2143,17 @@ const HEALTH_OVERVIEW_COLUMNS = [
   "Ticker",
   "Name",
   "Next Earnings",
-  "Last Qtr Surprise",
-  "Analyst Rating",
-  "Target Upside",
-  "Rev Growth",
-  "Profit Margin",
+  "Rev Growth QoQ",
+  "Rev Growth YoY",
+  "Net Income QoQ",
+  "Net Income YoY",
+  "Net Margin",
 ];
 
 function renderHealthOverviewRow(t) {
   const next = t.nextEarnings || {};
   const earningsFmt = fmtDaysAway(next.date, next.isEstimate);
-  const history = t.earningsHistory || [];
-  const lastQ = history.length ? history[history.length - 1] : null;
-  const surpriseFmt = lastQ ? fmtSurprise(lastQ.surprisePercent) : { text: "N/A", cls: "na" };
-  const analyst = t.analyst || {};
-  const ratingFmt = fmtRecommendationBadge(analyst.recommendationKey);
-  const upsideFmt = fmtTargetUpside(t.price, analyst.targetMean);
   const ratios = t.ratios || {};
-  const revGrowthCls = ratios.revenueGrowth == null ? "na" : ratios.revenueGrowth >= 0 ? "up" : "down";
 
   const tr = document.createElement("tr");
   tr.dataset.symbol = t.rawSymbol;
@@ -2172,11 +2161,11 @@ function renderHealthOverviewRow(t) {
     <td><span class="ticker-badge">${t.symbol}</span></td>
     <td class="name-cell">${t.name}</td>
     <td class="${earningsFmt.cls}">${earningsFmt.text}</td>
-    <td class="${surpriseFmt.cls}">${surpriseFmt.text}</td>
-    <td class="${ratingFmt.cls}">${ratingFmt.text}</td>
-    <td class="${upsideFmt.cls}">${upsideFmt.text}</td>
-    <td class="${revGrowthCls}">${fmtPctFraction(ratios.revenueGrowth)}</td>
-    <td>${fmtPctPlain(ratios.profitMargins)}</td>
+    <td class="${growthCls(ratios.revenueGrowthQoQ)}">${fmtPctFraction(ratios.revenueGrowthQoQ)}</td>
+    <td class="${growthCls(ratios.revenueGrowthYoY)}">${fmtPctFraction(ratios.revenueGrowthYoY)}</td>
+    <td class="${growthCls(ratios.netIncomeGrowthQoQ)}">${fmtPctFraction(ratios.netIncomeGrowthQoQ)}</td>
+    <td class="${growthCls(ratios.netIncomeGrowthYoY)}">${fmtPctFraction(ratios.netIncomeGrowthYoY)}</td>
+    <td class="${growthCls(ratios.netMargin)}">${fmtPctPlain(ratios.netMargin)}</td>
   `;
   tr.addEventListener("click", () => selectHealthTicker(t.rawSymbol));
   return tr;
@@ -2235,10 +2224,8 @@ function renderHealthDetail(t) {
 
   const next = t.nextEarnings || {};
   const earningsFmt = fmtDaysAway(next.date, next.isEstimate);
-  const analyst = t.analyst || {};
   const ratios = t.ratios || {};
   const estimates = t.estimates || {};
-  const latestRec = (analyst.trend || [])[0];
 
   const earningsHistoryRows =
     (t.earningsHistory || []).map(fmtEarningsHistoryRow).join("") || `<tr><td colspan="4" class="na">No data</td></tr>`;
@@ -2262,15 +2249,6 @@ function renderHealthDetail(t) {
       `
       )
       .join("") || `<tr><td colspan="3" class="na">No data</td></tr>`;
-
-  const targetText =
-    analyst.targetMean != null
-      ? `${analyst.targetLow != null ? `$${analyst.targetLow.toFixed(0)}` : "?"} – $${analyst.targetMean.toFixed(0)} – ${
-          analyst.targetHigh != null ? `$${analyst.targetHigh.toFixed(0)}` : "?"
-        }`
-      : "N/A";
-  const upsideFmt = fmtTargetUpside(t.price, analyst.targetMean);
-  const ratingFmt = fmtRecommendationBadge(analyst.recommendationKey);
 
   const body = document.getElementById("health-detail-body");
   body.innerHTML = `
@@ -2301,30 +2279,22 @@ function renderHealthDetail(t) {
     </div>
 
     <div class="health-section">
-      <div class="health-section-title">Analyst View</div>
+      <div class="health-section-title">Revenue &amp; Profit Growth</div>
       <div class="health-stat-grid">
-        ${statCard("Rating", `<span class="${ratingFmt.cls}">${ratingFmt.text}</span>`)}
-        ${statCard("Analysts", analyst.numberOfAnalysts ?? "N/A")}
-        ${statCard("Price Target (Low–Mean–High)", targetText)}
-        ${statCard("Upside to Mean Target", `<span class="${upsideFmt.cls}">${upsideFmt.text}</span>`)}
+        ${statCard("Revenue Growth QoQ", `<span class="${growthCls(ratios.revenueGrowthQoQ)}">${fmtPctFraction(ratios.revenueGrowthQoQ)}</span>`)}
+        ${statCard("Revenue Growth YoY", `<span class="${growthCls(ratios.revenueGrowthYoY)}">${fmtPctFraction(ratios.revenueGrowthYoY)}</span>`)}
+        ${statCard("Net Income Growth QoQ", `<span class="${growthCls(ratios.netIncomeGrowthQoQ)}">${fmtPctFraction(ratios.netIncomeGrowthQoQ)}</span>`)}
+        ${statCard("Net Income Growth YoY", `<span class="${growthCls(ratios.netIncomeGrowthYoY)}">${fmtPctFraction(ratios.netIncomeGrowthYoY)}</span>`)}
+        ${statCard("Net Margin", `<span class="${growthCls(ratios.netMargin)}">${fmtPctPlain(ratios.netMargin)}</span>`)}
+        ${statCard("Net Margin Change QoQ", fmtPctPointChange(ratios.netMarginChangeQoQ))}
       </div>
-      ${
-        latestRec
-          ? `<p class="health-note">${latestRec.strongBuy ?? 0} Strong Buy · ${latestRec.buy ?? 0} Buy · ${
-              latestRec.hold ?? 0
-            } Hold · ${latestRec.sell ?? 0} Sell · ${latestRec.strongSell ?? 0} Strong Sell</p>`
-          : ""
-      }
     </div>
 
     <div class="health-section">
       <div class="health-section-title">Financial Health</div>
       <div class="health-stat-grid">
-        ${statCard("Revenue Growth", fmtPctFraction(ratios.revenueGrowth))}
-        ${statCard("Earnings Growth", fmtPctFraction(ratios.earningsGrowth))}
         ${statCard("Gross Margin", fmtPctPlain(ratios.grossMargins))}
         ${statCard("Operating Margin", fmtPctPlain(ratios.operatingMargins))}
-        ${statCard("Profit Margin", fmtPctPlain(ratios.profitMargins))}
         ${statCard("Return on Equity", fmtPctPlain(ratios.returnOnEquity))}
         ${statCard("Return on Assets", fmtPctPlain(ratios.returnOnAssets))}
         ${statCard("Debt / Equity", fmtPctRaw(ratios.debtToEquity))}
@@ -2346,7 +2316,8 @@ function renderHealthDetail(t) {
     </div>
 
     <div class="health-section">
-      <div class="health-section-title">News &amp; Filings</div>
+      <div class="health-section-title">Other Material News &amp; Filings</div>
+      <p class="health-note">M&amp;A, litigation, leadership changes, guidance revisions, and other filings — routine quarterly/annual results announcements are left out since those are already covered above.</p>
       <div id="health-news-content"><div class="chart-status static">Loading…</div></div>
     </div>
   `;
