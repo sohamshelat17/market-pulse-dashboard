@@ -12,6 +12,7 @@ Then open: http://127.0.0.1:8787
 import http.cookiejar
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -253,7 +254,11 @@ auth = YahooAuth()
 
 def fetch_json(url, authed=False):
     """GET url as JSON. When authed, attaches the Yahoo crumb/cookie and
-    retries once with a fresh crumb on a 401 (crumb can go stale)."""
+    retries once with a fresh crumb on a 401 (crumb can go stale). Also
+    retries with backoff on a 429 (rate limited) -- every cache warms up
+    around the same time on a cold start, and that burst (now six caches,
+    including the Financial Health one's 75 requests) can trip Yahoo's
+    rate limiter even with the startup stagger below."""
     opener = auth.opener() if authed else None
 
     def do_request(u):
@@ -263,14 +268,24 @@ def fetch_json(url, authed=False):
             return json.load(resp)
 
     target = f"{url}&crumb={quote(auth.crumb())}" if authed else url
-    try:
-        return do_request(target)
-    except HTTPError as exc:
-        if authed and exc.code == 401:
-            auth.invalidate()
-            target = f"{url}&crumb={quote(auth.crumb())}"
+    retry_delay = 1.0
+    for attempt in range(4):
+        try:
             return do_request(target)
-        raise
+        except HTTPError as exc:
+            if authed and exc.code == 401 and attempt == 0:
+                auth.invalidate()
+                target = f"{url}&crumb={quote(auth.crumb())}"
+                continue
+            if exc.code == 429 and attempt < 3:
+                # Jittered, not just exponential: a burst of concurrent
+                # threads that all got 429'd together would otherwise all
+                # retry at the same instant and likely get 429'd together
+                # again.
+                time.sleep(retry_delay + random.uniform(0, retry_delay))
+                retry_delay *= 2
+                continue
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -744,13 +759,37 @@ health_cache = Cache(HEALTH_TTL_SECONDS, fetch_all_health)
 
 # Kick off the first population of every cache the moment the process
 # starts, instead of waiting for the first real request to trigger it --
-# Cache.get() never blocks, so this just starts the background loads
-# immediately and returns. That overlaps cache warm-up with however long
-# Render still takes to finish spinning up the dyno and route the first
-# visitor's request in, rather than only starting the clock once that
-# request actually arrives.
-for _cache in (price_cache, stats_cache, watchlist_price_cache, watchlist_ath_cache, historical_returns_cache, health_cache):
-    _cache.get()
+# Cache.get() never blocks, so each call just starts a background load and
+# returns immediately. That overlaps cache warm-up with however long Render
+# still takes to finish spinning up the dyno and route the first visitor's
+# request in, rather than only starting the clock once that request
+# actually arrives.
+#
+# Staggered (in a background thread, so it doesn't delay the HTTP server
+# itself from binding its port) rather than fired all at once: six caches'
+# worth of requests landing on Yahoo in the same couple of seconds --
+# including the two that hit the authed quoteSummary endpoint, stats_cache
+# and the newer health_cache -- was enough to trip Yahoo's rate limiter on
+# every cold start (confirmed via a 429 in production). Spacing them out
+# keeps the burst well under whatever that limit actually is.
+_PREWARM_ORDER = [
+    price_cache,
+    watchlist_price_cache,
+    stats_cache,
+    historical_returns_cache,
+    watchlist_ath_cache,
+    health_cache,
+]
+
+
+def _staggered_prewarm():
+    for i, cache in enumerate(_PREWARM_ORDER):
+        if i:
+            time.sleep(3)
+        cache.get()
+
+
+threading.Thread(target=_staggered_prewarm, daemon=True).start()
 
 _history_cache = {}
 _history_lock = threading.Lock()
