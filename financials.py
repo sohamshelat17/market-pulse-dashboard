@@ -149,7 +149,7 @@ def get_last_error():
 def fetch_all_health(symbols, fetch_json_authed):
     global _last_error
     results = {}
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_health_one, s, fetch_json_authed): s for s in symbols}
         for future, symbol in futures.items():
             try:

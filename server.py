@@ -454,7 +454,7 @@ def fetch_stats_one(symbol):
 
 def fetch_all_stats():
     stats = {}
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_stats_one, s): s for s in ALL_SYMBOLS}
         for future, symbol in futures.items():
             stats[symbol] = future.result()
