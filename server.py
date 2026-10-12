@@ -27,6 +27,7 @@ import constituents
 import financials
 import news
 import watchlist
+import yahoo_throttle
 
 PORT = 8787
 PRICE_TTL_SECONDS = 15
@@ -225,10 +226,12 @@ class YahooAuth:
         self._lock = threading.Lock()
 
     def _refresh_locked(self):
+        yahoo_throttle.wait_turn()
         try:
             self._opener.open(Request("https://fc.yahoo.com", headers=YAHOO_HEADERS), timeout=REQUEST_TIMEOUT).read()
         except Exception:
             pass  # cookie may still have been set even on a non-200
+        yahoo_throttle.wait_turn()
         with self._opener.open(
             Request("https://query2.finance.yahoo.com/v1/test/getcrumb", headers=YAHOO_HEADERS),
             timeout=REQUEST_TIMEOUT,
@@ -255,13 +258,16 @@ auth = YahooAuth()
 def fetch_json(url, authed=False):
     """GET url as JSON. When authed, attaches the Yahoo crumb/cookie and
     retries once with a fresh crumb on a 401 (crumb can go stale). Also
-    retries with backoff on a 429 (rate limited) -- every cache warms up
-    around the same time on a cold start, and that burst (now six caches,
-    including the Financial Health one's 75 requests) can trip Yahoo's
-    rate limiter even with the startup stagger below."""
+    retries with backoff on a 429 (rate limited), and paces every request
+    through yahoo_throttle -- per-cache concurrency limits alone weren't
+    enough in production, since even one cache's own burst was enough to
+    trip Yahoo's rate limiter independent of the others. What actually
+    matters is the combined request rate across every cache, hence the
+    shared app-wide throttle rather than another per-cache tweak."""
     opener = auth.opener() if authed else None
 
     def do_request(u):
+        yahoo_throttle.wait_turn()
         req = Request(u, headers=YAHOO_HEADERS)
         opener_ = opener or build_opener()
         with opener_.open(req, timeout=REQUEST_TIMEOUT) as resp:

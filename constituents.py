@@ -55,6 +55,8 @@ from urllib.request import Request, urlopen
 
 import openpyxl
 
+import yahoo_throttle
+
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 REQUEST_TIMEOUT = 15
 CONSTITUENT_CAP = 75
@@ -111,6 +113,7 @@ def fetch_price_simple(symbol):
 
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}?interval=1d&range=1d"
     req = Request(url, headers=HEADERS)
+    yahoo_throttle.wait_turn()
     with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         payload = json.load(resp)
     meta = payload["chart"]["result"][0]["meta"]
@@ -135,6 +138,7 @@ def fetch_all_time_high(symbol):
         f"?interval=1d&period1=0&period2={int(time.time())}"
     )
     req = Request(url, headers=HEADERS)
+    yahoo_throttle.wait_turn()
     with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
         payload = json.load(resp)
     quote_data = payload["chart"]["result"][0]["indicators"]["quote"][0]
