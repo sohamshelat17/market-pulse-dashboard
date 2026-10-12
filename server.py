@@ -219,11 +219,24 @@ ARBITRARY_SYMBOL_RE = re.compile(r"^\^?[A-Za-z0-9.\-]{1,15}$")
 
 
 class YahooAuth:
+    """getcrumb specifically turned out to have a much tighter rate limit
+    than the data endpoints -- every ticker whose authed fetch fails (e.g.
+    on a 401) sees no crumb cached and tries to refresh it again, and under
+    load that meant dozens of refresh attempts in quick succession even
+    with the shared request throttle, which kept the crumb endpoint itself
+    pinned in a 429 state long after the data endpoints alone would have
+    recovered. A failed refresh now opens a cooldown (backing off
+    exponentially on repeated failures) during which crumb() fails fast
+    locally instead of making another network call, so a block on this
+    endpoint specifically gets a chance to actually clear."""
+
     def __init__(self):
         self._jar = http.cookiejar.CookieJar()
         self._opener = build_opener(HTTPCookieProcessor(self._jar))
         self._crumb = None
         self._lock = threading.Lock()
+        self._cooldown_until = 0.0
+        self._cooldown_seconds = 30.0
 
     def _refresh_locked(self):
         yahoo_throttle.wait_turn()
@@ -240,8 +253,21 @@ class YahooAuth:
 
     def crumb(self):
         with self._lock:
-            if not self._crumb:
+            if self._crumb:
+                return self._crumb
+            now = time.time()
+            if now < self._cooldown_until:
+                raise RuntimeError(
+                    f"Yahoo crumb refresh on cooldown for {self._cooldown_until - now:.0f}s more "
+                    "(a prior refresh attempt was rate-limited)"
+                )
+            try:
                 self._refresh_locked()
+                self._cooldown_seconds = 30.0  # back to baseline after a real success
+            except Exception:
+                self._cooldown_until = time.time() + self._cooldown_seconds
+                self._cooldown_seconds = min(self._cooldown_seconds * 2, 600.0)
+                raise
             return self._crumb
 
     def invalidate(self):
