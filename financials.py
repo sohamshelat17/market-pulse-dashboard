@@ -136,15 +136,27 @@ def fetch_health_one(symbol, fetch_json_authed):
     }
 
 
+# TODO: remove once the prod data gap is diagnosed. Module-level (not
+# per-Cache-load) so the most recent failure is still readable even when
+# fetch_all_health raises below and the Cache discards that attempt's data.
+_last_error = None
+
+
+def get_last_error():
+    return _last_error
+
+
 def fetch_all_health(symbols, fetch_json_authed):
+    global _last_error
     results = {}
     with ThreadPoolExecutor(max_workers=20) as pool:
         futures = {pool.submit(fetch_health_one, s, fetch_json_authed): s for s in symbols}
         for future, symbol in futures.items():
             try:
                 results[symbol] = future.result()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 results[symbol] = {}
+                _last_error = f"{type(exc).__name__}: {exc}"
 
     # Same serial-retry-after-burst pattern used elsewhere in this app: a
     # handful of fetches can fail under the initial concurrent burst from
@@ -153,6 +165,17 @@ def fetch_all_health(symbols, fetch_json_authed):
     for symbol in [s for s, r in results.items() if not r]:
         try:
             results[symbol] = fetch_health_one(symbol, fetch_json_authed)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            _last_error = f"{type(exc).__name__}: {exc}"
+
+    # If literally every ticker failed, this almost certainly isn't 75
+    # independent per-ticker problems -- it's something systemic (an auth
+    # failure, a network block, Yahoo rate-limiting). Raising here (instead
+    # of quietly "succeeding" with an all-empty result) matters because the
+    # caller is a Cache: a successful-looking empty load gets stamped as
+    # fresh and won't be retried again for the full TTL, so a systemic
+    # failure would otherwise lock in empty data for hours.
+    if symbols and all(not r for r in results.values()):
+        raise RuntimeError(f"fetch_all_health: every ticker failed ({_last_error})")
+
     return results

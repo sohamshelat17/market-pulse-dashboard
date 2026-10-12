@@ -664,6 +664,7 @@ def fetch_all_health():
 def build_health_response():
     prices = watchlist_price_cache.get()
     health = health_cache.get()
+    debug_last_error = financials.get_last_error()  # TODO: remove once the prod data gap is diagnosed
 
     tickers_out = []
     for t in watchlist.WATCHLIST_TICKERS:
@@ -685,7 +686,7 @@ def build_health_response():
                 "annualTrend": h.get("annualTrend", []),
             }
         )
-    return {"tickers": tickers_out, "updatedAt": time.time()}
+    return {"tickers": tickers_out, "updatedAt": time.time(), "debugLastError": debug_last_error}
 
 
 # ---------------------------------------------------------------------------
