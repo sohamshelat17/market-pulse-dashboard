@@ -1360,10 +1360,18 @@ function createPriceChartController(ids) {
     const endTouch = (e) => {
       if (touchCandidateIndex === null) return;
       e.preventDefault();
-      if (state.dragState) {
+      // A finger practically never stays perfectly still during a tap, so
+      // touchmove almost always fires at least once -- that alone doesn't
+      // mean the user meant to drag. Same real-distance check mouseup
+      // already does: only freeze a measurement if the touch actually
+      // crossed into a different bar; otherwise this was just a tap, and
+      // freezing a same-index "measurement" here previously left a stuck
+      // zero-width tooltip on screen until the next real interaction.
+      if (state.dragState && state.dragState.startIndex !== state.dragState.endIndex) {
         state.dragState.active = false; // freeze the measurement, same as a mouse drag release
-      } else if (state.overlayCtx && state.layout) {
-        state.overlayCtx.clearRect(0, 0, state.layout.width, state.layout.height); // just a tap -- clear the crosshair
+      } else {
+        state.dragState = null;
+        if (state.overlayCtx && state.layout) state.overlayCtx.clearRect(0, 0, state.layout.width, state.layout.height); // just a tap -- clear the crosshair
       }
       touchCandidateIndex = null;
     };
