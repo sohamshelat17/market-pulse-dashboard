@@ -476,11 +476,15 @@ body {
 .heat-cell .heat-drawdown {
   font-size: 10px;
   font-weight: 700;
-  /* Fixed near-white, not red/green -- this tile's own background is
-     already red or green (today's change%), so colored text here would
-     clash and lose legibility exactly on the backgrounds it needs to
-     read against. Matches .heat-symbol/.heat-pct's same treatment. */
-  color: #f8fafc;
+  /* Near-white (matching .heat-symbol/.heat-pct) washed out against this
+     tile's own red/green background (today's change%) -- hard to read at
+     a glance, especially on the brighter/more saturated end of either
+     hue. Yellow sits far enough from both red and green on the color
+     wheel to read clearly against the whole lightness/saturation range
+     heatColor() produces for either sign; the text-shadow adds a dark
+     halo so it stays legible even on the lightest tiles. */
+  color: #fde047;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 .calendar-heatmap {
