@@ -3,37 +3,59 @@ public source (not a paid data vendor), plus today's price change per
 constituent for the advance/decline heatmap.
 
 Sources, one per fund family:
-  - State Street/SPDR (SPY + the 9 sector funds): public XLSX file,
-    no auth, no session needed.
-  - iShares/BlackRock (EWZ, EWJ, EWY, INDA, FXI, IEMG, IWM, IGV): the same
-    JSON API their own product pages call to render the holdings table.
+  - State Street/SPDR (SPY, the 9 sector funds, XSD, XBI, XHB): public
+    XLSX file, no auth, no session needed.
+  - iShares/BlackRock (EWZ, EWJ, EWY, INDA, FXI, IEMG, IWM, IGV, SOXX, ITA,
+    IBB): the same JSON API their own product pages call to render the
+    holdings table.
   - Vanguard (VNQ, VGK, VEA): same idea, their own JSON API.
-  - Invesco (QQQ, RSP): no clean public endpoint was found (their direct
-    "download" link returns HTML disguised as a file, and the page runs
-    an invisible reCAPTCHA). Full holdings require driving their Schwab-
-    hosted research widget with a real browser (Playwright). Since a
-    headless-browser dependency may not run on constrained hosts (e.g.
+  - Invesco (QQQ, RSP, PSI): no clean public endpoint was found (their
+    direct "download" link returns HTML disguised as a file, and the page
+    runs an invisible reCAPTCHA). Full holdings require driving their
+    Schwab-hosted research widget with a real browser (Playwright). Since
+    a headless-browser dependency may not run on constrained hosts (e.g.
     Render's free tier), this degrades automatically to a plain-page
     top-20 fetch if Playwright is unavailable or fails, rather than
     breaking the endpoint.
-  - VanEck (SMH, NLR): public JSON API; a single blockId/pageId pair
-    works for any of their tickers.
+  - VanEck (SMH, NLR, REMX): public JSON API; a single blockId/pageId
+    pair works for any of their tickers.
   - Roundhill (DRAM): one shared CSV per day across all their funds,
     filtered by an "Account" column; publishes with a lag, so a few
     prior days are tried until one exists.
   - Corgi (EUV): public JSON API behind their fund page's own backend.
-  - First Trust (CIBR): server-rendered HTML holdings table (no JSON API
-    found), parsed directly -- more fragile than a documented API, so
-    sanity-checked by column count before trusting a row.
+  - First Trust (CIBR, SKYY, GRID, QCLN): server-rendered HTML holdings
+    table (no JSON API found), parsed directly -- more fragile than a
+    documented API, so sanity-checked by column count before trusting a
+    row.
   - CoinShares (WGMI): an undocumented but public JSON API reverse
     engineered from the site's own JS bundle; the API key in the URL is a
     public value shipped client-side, not a per-user credential.
-  - Global X (DTCR, BOTZ): the daily holdings CSV's URL is date-stamped
-    and only discoverable by reading it out of the fund page's own HTML,
-    so that page is fetched fresh each time to find the current link.
-  - ARK (ARKX): a fixed-filename daily CSV, updated in place.
+  - Global X (DTCR, BOTZ, PAVE, COPX): the daily holdings CSV's URL is
+    date-stamped and only discoverable by reading it out of the fund
+    page's own HTML, so that page is fetched fresh each time to find the
+    current link.
+  - ARK (ARKX, ARKF, ARKG, ARKQ): a fixed-filename daily CSV per fund,
+    updated in place.
   - Defiance (QTUM): a two-step flow -- a WordPress AJAX action returns
     today's dated XLSX filename, then that file is fetched and parsed.
+  - Amplify (HACK, BLOK): an undocumented but public Firestore REST API,
+    same "public client-side key, not a secret" situation as CoinShares --
+    one query orders each fund's own "holdings" subcollection by document
+    ID (an ISO date) descending and takes the first, which returns the
+    full holdings array directly, no second fetch needed.
+  - Procure (UFO): same date-stamped-CSV-discovered-via-HTML idea as
+    Global X, different provider.
+  - ROBO Global (ROBO): the fund site is a server-rendered Nuxt 3 app
+    whose holdings table only ever gets populated client-side from the
+    page's own hydration payload -- a flat devalue-encoded array in a
+    <script id="__NUXT_DATA__"> tag. Full devalue deserialization handles
+    far more than this needs (Maps, Sets, Dates, circular refs); each
+    holding is just a small object whose values are themselves indexes
+    back into that same array, so matching that one shape and resolving
+    its fields directly is enough.
+  - U.S. Global Investors (JETS): server-rendered HTML holdings table
+    with a distinctive, well-labelled markup (every cell is a title/data
+    pair), parsed by that structure rather than position.
 
 Every holdings list is capped to the top N by weight (CONSTITUENT_CAP)
 before fetching live prices -- large funds (IEMG, VEA both run into the
@@ -679,6 +701,188 @@ def fetch_defiance_holdings(ticker):
 
 
 # ---------------------------------------------------------------------------
+# Amplify -- holdings live in a public Firestore project (apiKey is a
+# client-side value shipped in the fund site's own JS bundle, not a secret,
+# same pattern as CoinShares' ApiKey elsewhere in this file). One query gets
+# the latest dated holdings doc directly: order the per-ticker "holdings"
+# subcollection by document ID (an ISO date) descending, take the first.
+# ---------------------------------------------------------------------------
+
+AMPLIFY_PROJECT_ID = "amplify-etfs-data-feed"
+AMPLIFY_API_KEY = "AIzaSyCibhGo4lu8ZALtBvf_ZT351BDMUPqOYjc"
+AMPLIFY_TICKERS = {"HACK", "BLOK"}
+
+
+def _firestore_value(value):
+    """Unwrap one Firestore REST-format typed value ({"stringValue": ...},
+    {"doubleValue": ...}, etc.) down to a plain Python value."""
+    if not isinstance(value, dict):
+        return value
+    for key in ("stringValue", "integerValue", "doubleValue", "booleanValue"):
+        if key in value:
+            raw = value[key]
+            return int(raw) if key == "integerValue" else raw
+    return None
+
+
+def fetch_amplify_holdings(ticker):
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{AMPLIFY_PROJECT_ID}"
+        f"/databases/(default)/documents/funds/{ticker}:runQuery?key={AMPLIFY_API_KEY}"
+    )
+    body = json.dumps(
+        {
+            "structuredQuery": {
+                "from": [{"collectionId": "holdings"}],
+                "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "DESCENDING"}],
+                "limit": 1,
+            }
+        }
+    ).encode()
+    req = Request(url, data=body, headers={**HEADERS, "Content-Type": "application/json"})
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        results = json.load(resp)
+
+    fields = (((results or [{}])[0]).get("document") or {}).get("fields") or {}
+    raw_holdings = (fields.get("holdings", {}).get("arrayValue", {}) or {}).get("values", [])
+
+    holdings = []
+    for item in raw_holdings:
+        row = {k: _firestore_value(v) for k, v in (item.get("mapValue", {}).get("fields") or {}).items()}
+        if (row.get("holding_type") or "").lower() != "equity":
+            continue  # skip cash/money-market line items, same as the iShares path
+        symbol = (row.get("StockTicker") or "").strip()
+        weight_str = (row.get("Weightings") or "").replace("%", "").strip()
+        if not symbol or not weight_str:
+            continue
+        try:
+            weight = float(weight_str)
+        except ValueError:
+            continue
+        holdings.append({"symbol": symbol, "name": row.get("SecurityName") or symbol, "weight": weight})
+    return holdings
+
+
+# ---------------------------------------------------------------------------
+# Procure -- the holdings CSV's filename is dated and only discoverable as
+# literal text in the fund page's own HTML, same idea as Global X above.
+# ---------------------------------------------------------------------------
+
+PROCURE_TICKERS = {"UFO"}
+
+
+def fetch_procure_holdings(ticker):
+    page_url = f"https://www.procureetfs.com/{ticker.lower()}"
+    req = Request(page_url, headers=HEADERS)
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+
+    # http, not https -- that's how the page's own link is written.
+    match = re.search(r"http://procureetfs\.com/wp-content/uploads/[^\"'\s]+Holdings[^\"'\s]*\.csv", html)
+    if not match:
+        return []
+
+    req = Request(match.group(0), headers=HEADERS)
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        text = resp.read().decode("utf-8", errors="ignore")
+
+    holdings = []
+    for row in csv.DictReader(io.StringIO(text)):
+        symbol = (row.get("StockTicker") or "").strip()
+        weight_str = (row.get("Weightings") or "").replace("%", "").strip()
+        if not symbol or not weight_str:
+            continue
+        try:
+            weight = float(weight_str)
+        except ValueError:
+            continue
+        holdings.append({"symbol": symbol, "name": row.get("SecurityName") or symbol, "weight": weight})
+    return holdings
+
+
+# ---------------------------------------------------------------------------
+# ROBO Global -- the fund site is a server-rendered Nuxt 3 app; the holdings
+# table itself is only ever populated client-side from the page's own Nuxt
+# hydration payload (a flat devalue-encoded array embedded in a <script
+# id="__NUXT_DATA__"> tag), not a separate table in the raw HTML or any
+# standalone API endpoint. Full deserialization of that format (which
+# handles Maps/Sets/Dates/circular refs) is more than this needs -- each
+# holding is a small {"figi": N, "ticker": N, ...} object whose values are
+# themselves just indexes back into the same top-level array, so matching
+# that one shape and resolving its six fields directly is enough.
+# ---------------------------------------------------------------------------
+
+ROBOGLOBAL_TICKERS = {"ROBO"}
+ROBOGLOBAL_HOLDING_SHAPE = {"figi", "ticker", "quantity", "description", "market_value", "percent_of_nav"}
+
+
+def fetch_roboglobal_holdings(ticker):
+    url = f"https://www.roboglobaletfs.com/{ticker.lower()}"
+    req = Request(url, headers=HEADERS)
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+
+    match = re.search(r'<script[^>]*id="__NUXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+    if not match:
+        return []
+    data = json.loads(match.group(1))
+
+    holdings = []
+    for item in data:
+        if not (isinstance(item, dict) and set(item.keys()) == ROBOGLOBAL_HOLDING_SHAPE):
+            continue
+        try:
+            symbol = data[item["ticker"]]
+            name = data[item["description"]]
+            weight_str = data[item["percent_of_nav"]]
+        except (IndexError, TypeError):
+            continue
+        if not isinstance(symbol, str) or not isinstance(weight_str, str):
+            continue
+        try:
+            weight = float(weight_str.replace("%", ""))
+        except ValueError:
+            continue
+        holdings.append({"symbol": symbol, "name": name if isinstance(name, str) else symbol, "weight": weight})
+    return holdings
+
+
+# ---------------------------------------------------------------------------
+# U.S. Global Investors -- no JSON API found; the holdings table is
+# server-rendered HTML with a distinctive, well-structured markup (every
+# cell is a labelled title/data pair), parsed by that structure rather than
+# position so a reordered column wouldn't silently break it.
+# ---------------------------------------------------------------------------
+
+USGLOBAL_TICKERS = {"JETS"}
+USGLOBAL_URLS = {"JETS": "https://usglobaletfs.com/fund/u-s-global-jets-etf/"}
+
+
+def fetch_usglobal_holdings(ticker):
+    req = Request(USGLOBAL_URLS[ticker], headers=HEADERS)
+    with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+
+    holdings = []
+    for row_html in re.findall(r"<tr>(.*?)</tr>", html, re.S):
+        cells = re.findall(r'<div class="h-data[^"]*">\s*(.*?)\s*</div>', row_html, re.S)
+        if len(cells) != 7:
+            continue  # % Net Assets, Name, CUSIP, Country (flag image, no text), Ticker, Shares Held, Market ($)
+        pct_text, name, _cusip, _country, symbol, _shares, _market = cells
+        name = re.sub(r"\s+", " ", name).strip()
+        symbol = symbol.strip()
+        weight_str = pct_text.strip().replace("%", "")
+        if not symbol or not weight_str:
+            continue
+        try:
+            weight = float(weight_str)
+        except ValueError:
+            continue
+        holdings.append({"symbol": symbol, "name": name or symbol, "weight": weight})
+    return holdings
+
+
+# ---------------------------------------------------------------------------
 # Dispatch + payload assembly
 # ---------------------------------------------------------------------------
 
@@ -714,6 +918,14 @@ def fetch_constituents_raw(ticker):
         return fetch_ark_holdings(ticker), "ARK", False, None
     if ticker in DEFIANCE_TICKERS:
         return fetch_defiance_holdings(ticker), "Defiance", False, None
+    if ticker in AMPLIFY_TICKERS:
+        return fetch_amplify_holdings(ticker), "Amplify", False, None
+    if ticker in PROCURE_TICKERS:
+        return fetch_procure_holdings(ticker), "Procure", False, None
+    if ticker in ROBOGLOBAL_TICKERS:
+        return fetch_roboglobal_holdings(ticker), "ROBO Global", False, None
+    if ticker in USGLOBAL_TICKERS:
+        return fetch_usglobal_holdings(ticker), "U.S. Global Investors", False, None
     raise ValueError(f"No constituents source for {ticker}")
 
 
@@ -792,4 +1004,8 @@ ALL_CONSTITUENT_TICKERS = (
     | GLOBALX_TICKERS
     | ARK_TICKERS
     | DEFIANCE_TICKERS
+    | AMPLIFY_TICKERS
+    | PROCURE_TICKERS
+    | ROBOGLOBAL_TICKERS
+    | USGLOBAL_TICKERS
 )
