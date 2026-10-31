@@ -123,12 +123,133 @@ function getWeekKey(date) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared sorting -- used by the two heatmap sort-pill controls (single
+// fixed metric, three states) and the two "all tickers" tables (click any
+// column header, cycles through the same three states for that column).
+// ---------------------------------------------------------------------------
+
+// Stable sort by a numeric accessor; nulls always sink to the bottom
+// regardless of direction, since "missing data" isn't meaningfully high or
+// low. dir is "desc" | "asc" | "default" (original order, untouched).
+function sortByMetric(items, accessor, dir) {
+  if (dir === "default" || !dir) return items;
+  return items
+    .map((item, i) => ({ item, i, v: accessor(item) }))
+    .sort((a, b) => {
+      if (a.v == null && b.v == null) return a.i - b.i;
+      if (a.v == null) return 1;
+      if (b.v == null) return -1;
+      return dir === "asc" ? a.v - b.v : b.v - a.v;
+    })
+    .map((x) => x.item);
+}
+
+// Three-state click cycle for a sortable column header: unsorted -> desc ->
+// asc -> unsorted. Starting a new column always begins at desc (biggest/
+// most-extreme values first), matching the heatmap sort pills' order.
+function cycleColumnSort(current, key) {
+  if (current.key !== key) return { key, dir: "desc" };
+  if (current.dir === "desc") return { key, dir: "asc" };
+  return { key: null, dir: null };
+}
+
+function sortRowsByColumn(rows, columns, sortState) {
+  if (!sortState.key) return rows;
+  const col = columns.find((c) => c.key === sortState.key);
+  if (!col) return rows;
+  return rows
+    .map((row, i) => ({ row, i, v: col.accessor(row) }))
+    .sort((a, b) => {
+      const av = a.v;
+      const bv = b.v;
+      const aNull = av === null || av === undefined;
+      const bNull = bv === null || bv === undefined;
+      if (aNull && bNull) return a.i - b.i;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      let cmp;
+      if (col.type === "string") {
+        cmp = String(av).localeCompare(String(bv));
+      } else {
+        cmp = av === bv ? 0 : av > bv ? 1 : -1;
+      }
+      return sortState.dir === "asc" ? cmp : -cmp;
+    })
+    .map((x) => x.row);
+}
+
+function initSortPills(containerId, onChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll(".sort-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      container.querySelectorAll(".sort-pill").forEach((b) => b.classList.toggle("active", b === btn));
+      onChange(btn.dataset.dir);
+    });
+  });
+}
+
+// Shared by both "all tickers" tables: one panel, one table, clickable
+// sortable column headers. `rows` is already flattened (one entry per
+// ticker, group boundaries dropped) -- `columns[].accessor` reads the
+// value to sort by, `rowBuilder` renders one <tr>.
+function renderSortableTable(containerId, columns, rows, sortState, onSort, rowBuilder) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = "";
+  if (!rows || !rows.length) {
+    container.innerHTML = '<div class="chart-status static">No data available.</div>';
+    return;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap sortable-table-wrap";
+
+  const table = document.createElement("table");
+  table.className = "ticker-table";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((col) => {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    th.className = "sortable-th";
+    if (sortState.key === col.key) th.classList.add(sortState.dir === "asc" ? "sort-asc" : "sort-desc");
+    th.addEventListener("click", () => onSort(col.key));
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  sortRowsByColumn(rows, columns, sortState).forEach((row) => tbody.appendChild(rowBuilder(row)));
+  table.appendChild(tbody);
+
+  wrap.appendChild(table);
+  panel.appendChild(wrap);
+  container.appendChild(panel);
+}
+
+// ---------------------------------------------------------------------------
 // Ticker tables
 // ---------------------------------------------------------------------------
 
 function fmtEmaBullish(value) {
   if (value === null || value === undefined) return { text: "N/A", cls: "na" };
   return value ? { text: "True", cls: "up" } : { text: "False", cls: "down" };
+}
+
+// Maps a group's accent name (set server-side per TICKER_GROUPS entry) to
+// the CSS color variable the rest of the app already uses for that accent,
+// so the Group column reads as the same color as that group's own panel
+// dot/ticker-badge elsewhere on the page.
+const ACCENT_COLOR_VAR = { blue: "--blue", violet: "--violet", green: "--dot-green", amber: "--amber" };
+
+function groupCellHtml(ticker) {
+  const colorVar = ACCENT_COLOR_VAR[ticker.accent] || "--text-secondary";
+  return `<td class="group-cell" style="color: var(${colorVar})">${ticker.group}</td>`;
 }
 
 function renderRow(ticker) {
@@ -140,6 +261,7 @@ function renderRow(ticker) {
   const tr = document.createElement("tr");
   tr.dataset.symbol = ticker.rawSymbol;
   tr.innerHTML = `
+    ${groupCellHtml(ticker)}
     <td><span class="ticker-badge">${ticker.symbol}</span></td>
     <td class="name-cell">${ticker.name}</td>
     <td class="${hasPrice ? "" : "na"}">${fmtPrice(ticker.price)}</td>
@@ -157,158 +279,58 @@ function renderRow(ticker) {
   return tr;
 }
 
-// ---------------------------------------------------------------------------
-// Returns-by-period table -- 1D/1W/1M/3M/6M/1Y/5Y/all-time return for every
-// tracked ticker, grouped the same way as the ticker tables above.
-// ---------------------------------------------------------------------------
-
-const RETURN_COLUMNS = [
-  { key: "1D", label: "1D" },
-  { key: "1W", label: "1W" },
-  { key: "1M", label: "1M" },
-  { key: "3M", label: "3M" },
-  { key: "6M", label: "6M" },
-  { key: "1Y", label: "1Y" },
-  { key: "5Y", label: "5Y" },
-  { key: "ALL", label: "All-time" },
+const TICKER_DETAILS_COLUMNS = [
+  { key: "group", label: "Group", type: "string", accessor: (t) => t.group },
+  { key: "symbol", label: "Ticker", type: "string", accessor: (t) => t.symbol },
+  { key: "name", label: "Name", type: "string", accessor: (t) => t.name },
+  { key: "price", label: "Price", type: "number", accessor: (t) => t.price },
+  { key: "change", label: "Chg", type: "number", accessor: (t) => t.change },
+  { key: "changePercent", label: "Chg %", type: "number", accessor: (t) => t.changePercent },
+  { key: "pe", label: "P/E", type: "number", accessor: (t) => t.pe },
+  { key: "ema8", label: "8 EMA", type: "number", accessor: (t) => t.ema8 },
+  { key: "ema21", label: "21 EMA", type: "number", accessor: (t) => t.ema21 },
+  { key: "emaBullish", label: "8/21 Flag", type: "number", accessor: (t) => (t.emaBullish == null ? null : t.emaBullish ? 1 : 0) },
+  { key: "rsi14", label: "RSI (14)", type: "number", accessor: (t) => t.rsi14 },
+  { key: "todayVolume", label: "Volume", type: "number", accessor: (t) => t.todayVolume },
+  { key: "avgVolume", label: "Avg Vol", type: "number", accessor: (t) => t.avgVolume },
 ];
 
-function fmtReturn(pct) {
-  if (pct === null || pct === undefined) return { text: "N/A", cls: "na" };
-  const cls = pct > 0 ? "up" : pct < 0 ? "down" : "";
-  const sign = pct > 0 ? "+" : "";
-  return { text: `${sign}${pct.toFixed(1)}%`, cls };
-}
-
-function renderReturnsPanel(group) {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-
-  const header = document.createElement("div");
-  header.className = "panel-header";
-  header.dataset.accent = group.accent;
-  header.innerHTML = `<span class="dot"></span>${group.group}`;
-  panel.appendChild(header);
-
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-
-  const table = document.createElement("table");
-  table.className = "ticker-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Ticker</th>
-        <th>Name</th>
-        ${RETURN_COLUMNS.map((c) => `<th>${c.label}</th>`).join("")}
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
-  group.tickers.forEach((ticker) => {
-    const cells = RETURN_COLUMNS.map((col) => {
-      const { text, cls } = fmtReturn(ticker.returns[col.key]);
-      return `<td class="${cls}">${text}</td>`;
-    }).join("");
-    const tr = document.createElement("tr");
-    tr.dataset.symbol = ticker.rawSymbol;
-    tr.innerHTML = `
-      <td><span class="ticker-badge">${ticker.symbol}</span></td>
-      <td class="name-cell">${ticker.name}</td>
-      ${cells}
-    `;
-    tr.addEventListener("click", () => selectPrimaryTicker(ticker.rawSymbol));
-    tbody.appendChild(tr);
-  });
-
-  wrap.appendChild(table);
-  panel.appendChild(wrap);
-  return panel;
-}
-
-function renderReturnsTable(groups) {
-  const container = document.getElementById("returns-table");
-  container.innerHTML = "";
-  if (!groups || !groups.length) {
-    container.innerHTML = '<div class="chart-status static">No return data available.</div>';
-    return;
-  }
-
-  // One panel per group, same pattern as the ticker-details tables above --
-  // keeps every group short enough to need no internal scrolling, so each
-  // table's own header just stays in view naturally.
+// Flattens the grouped API response into one row per ticker (GROUP_ORDER,
+// then each group's own order -- this is the "Default" sort for both
+// "all tickers" tables), tagging each row with its group name/accent so
+// that info survives being pulled out of its old per-group panel.
+function flattenTickerGroups(groups) {
+  const flat = [];
   const groupByName = new Map(groups.map((g) => [g.group, g]));
   GROUP_ORDER.forEach((name) => {
     const group = groupByName.get(name);
-    if (group) container.appendChild(renderReturnsPanel(group));
+    if (!group) return;
+    group.tickers.forEach((t) => flat.push({ ...t, group: name, accent: group.accent }));
   });
+  return flat;
 }
 
-async function loadReturnsTable() {
-  const container = document.getElementById("returns-table");
-  try {
-    const res = await fetch("/api/returns", { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    renderReturnsTable(data.groups);
-  } catch (err) {
-    container.innerHTML = `<div class="chart-status static">Failed to load returns: ${err.message}</div>`;
-  }
-}
+let latestTickerDetailsRows = [];
+let tickerDetailsSort = { key: null, dir: null };
 
-function renderPanel(group) {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-
-  const header = document.createElement("div");
-  header.className = "panel-header";
-  header.dataset.accent = group.accent;
-  header.innerHTML = `<span class="dot"></span>${group.group}`;
-  panel.appendChild(header);
-
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-
-  const table = document.createElement("table");
-  table.className = "ticker-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Ticker</th>
-        <th>Name</th>
-        <th>Price</th>
-        <th>Chg</th>
-        <th>Chg %</th>
-        <th>P/E</th>
-        <th>8 EMA</th>
-        <th>21 EMA</th>
-        <th>8/21 Flag</th>
-        <th>RSI (14)</th>
-        <th>Volume</th>
-        <th>Avg Vol</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
-  group.tickers.forEach((ticker) => tbody.appendChild(renderRow(ticker)));
-
-  wrap.appendChild(table);
-  panel.appendChild(wrap);
-  return panel;
+function renderTickerDetailsTable() {
+  renderSortableTable(
+    "groups",
+    TICKER_DETAILS_COLUMNS,
+    latestTickerDetailsRows,
+    tickerDetailsSort,
+    (key) => {
+      tickerDetailsSort = cycleColumnSort(tickerDetailsSort, key);
+      renderTickerDetailsTable();
+    },
+    renderRow
+  );
 }
 
 function renderGroups(groups) {
   latestGroups = groups;
-  const container = document.getElementById("groups");
-  container.innerHTML = "";
-
-  const groupByName = new Map(groups.map((g) => [g.group, g]));
-  GROUP_ORDER.forEach((name) => {
-    const group = groupByName.get(name);
-    if (group) container.appendChild(renderPanel(group));
-  });
+  latestTickerDetailsRows = flattenTickerGroups(groups);
+  renderTickerDetailsTable();
 
   populateTickerSelect(groups);
   renderOverviewHeatmap(groups);
@@ -342,29 +364,114 @@ async function loadQuotes() {
 }
 
 // ---------------------------------------------------------------------------
+// Returns-by-period table -- 1D/1W/1M/3M/6M/1Y/5Y/all-time return for every
+// tracked ticker, same flattened-and-sortable shape as the table above.
+// ---------------------------------------------------------------------------
+
+const RETURN_COLUMNS = [
+  { key: "1D", label: "1D" },
+  { key: "1W", label: "1W" },
+  { key: "1M", label: "1M" },
+  { key: "3M", label: "3M" },
+  { key: "6M", label: "6M" },
+  { key: "1Y", label: "1Y" },
+  { key: "5Y", label: "5Y" },
+  { key: "ALL", label: "All-time" },
+];
+
+const RETURNS_TABLE_COLUMNS = [
+  { key: "group", label: "Group", type: "string", accessor: (t) => t.group },
+  { key: "symbol", label: "Ticker", type: "string", accessor: (t) => t.symbol },
+  { key: "name", label: "Name", type: "string", accessor: (t) => t.name },
+  ...RETURN_COLUMNS.map((c) => ({ key: c.key, label: c.label, type: "number", accessor: (t) => t.returns[c.key] })),
+];
+
+function fmtReturn(pct) {
+  if (pct === null || pct === undefined) return { text: "N/A", cls: "na" };
+  const cls = pct > 0 ? "up" : pct < 0 ? "down" : "";
+  const sign = pct > 0 ? "+" : "";
+  return { text: `${sign}${pct.toFixed(1)}%`, cls };
+}
+
+function renderReturnsRow(ticker) {
+  const cells = RETURN_COLUMNS.map((col) => {
+    const { text, cls } = fmtReturn(ticker.returns[col.key]);
+    return `<td class="${cls}">${text}</td>`;
+  }).join("");
+  const tr = document.createElement("tr");
+  tr.dataset.symbol = ticker.rawSymbol;
+  tr.innerHTML = `
+    ${groupCellHtml(ticker)}
+    <td><span class="ticker-badge">${ticker.symbol}</span></td>
+    <td class="name-cell">${ticker.name}</td>
+    ${cells}
+  `;
+  tr.addEventListener("click", () => selectPrimaryTicker(ticker.rawSymbol));
+  return tr;
+}
+
+let latestReturnsRows = [];
+let returnsSort = { key: null, dir: null };
+
+function renderReturnsTableSorted() {
+  renderSortableTable(
+    "returns-table",
+    RETURNS_TABLE_COLUMNS,
+    latestReturnsRows,
+    returnsSort,
+    (key) => {
+      returnsSort = cycleColumnSort(returnsSort, key);
+      renderReturnsTableSorted();
+    },
+    renderReturnsRow
+  );
+}
+
+function renderReturnsTable(groups) {
+  latestReturnsRows = flattenTickerGroups(groups);
+  renderReturnsTableSorted();
+}
+
+async function loadReturnsTable() {
+  const container = document.getElementById("returns-table");
+  try {
+    const res = await fetch("/api/returns", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderReturnsTable(data.groups);
+  } catch (err) {
+    container.innerHTML = `<div class="chart-status static">Failed to load returns: ${err.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // All-tickers overview heatmap (today's advance/decline)
 // ---------------------------------------------------------------------------
 
+let latestOverviewTickers = []; // flattened, GROUP_ORDER order (the "Default" sort)
+let overviewSortDir = "default";
+
 function renderOverviewHeatmap(groups) {
+  latestOverviewTickers = flattenTickerGroups(groups);
+  renderOverviewTiles();
+}
+
+function renderOverviewTiles() {
   const container = document.getElementById("overview-heatmap");
   container.innerHTML = "";
-
-  GROUP_ORDER.forEach((name) => {
-    const group = groups.find((g) => g.group === name);
-    if (!group) return;
-    group.tickers.forEach((ticker) => {
-      const cell = document.createElement("div");
-      cell.className = "heat-cell";
-      cell.style.background = heatColor(ticker.changePercent);
-      cell.title = `${ticker.symbol} — ${ticker.name}: ${fmtPercent(ticker.changePercent)}`;
-      cell.innerHTML = `
-        <span class="heat-symbol">${ticker.symbol}</span>
-        <span class="heat-name">${ticker.name}</span>
-        <span class="heat-pct">${fmtPercent(ticker.changePercent)}</span>
-      `;
-      cell.addEventListener("click", () => selectPrimaryTicker(ticker.rawSymbol));
-      container.appendChild(cell);
-    });
+  const tickers = sortByMetric(latestOverviewTickers, (t) => t.changePercent, overviewSortDir);
+  tickers.forEach((ticker) => {
+    const cell = document.createElement("div");
+    cell.className = "heat-cell";
+    cell.style.background = heatColor(ticker.changePercent);
+    cell.title = `${ticker.symbol} — ${ticker.name}: ${fmtPercent(ticker.changePercent)}`;
+    cell.innerHTML = `
+      <span class="heat-symbol">${ticker.symbol}</span>
+      <span class="heat-name">${ticker.name}</span>
+      <span class="heat-pct">${fmtPercent(ticker.changePercent)}</span>
+    `;
+    cell.addEventListener("click", () => selectPrimaryTicker(ticker.rawSymbol));
+    container.appendChild(cell);
   });
 }
 
@@ -372,6 +479,9 @@ function renderOverviewHeatmap(groups) {
 // Watchlist heatmap (separate ticker list, not part of the tracked ETFs --
 // no click-to-select since these aren't valid chart/history symbols here)
 // ---------------------------------------------------------------------------
+
+let latestWatchlistTickers = [];
+let watchlistSortDir = "default";
 
 async function loadWatchlist() {
   const container = document.getElementById("watchlist-heatmap");
@@ -386,9 +496,14 @@ async function loadWatchlist() {
 }
 
 function renderWatchlistHeatmap(tickers) {
+  latestWatchlistTickers = tickers;
+  renderWatchlistTiles();
+}
+
+function renderWatchlistTiles() {
   const container = document.getElementById("watchlist-heatmap");
   container.innerHTML = "";
-
+  const tickers = sortByMetric(latestWatchlistTickers, (t) => t.changePercent, watchlistSortDir);
   tickers.forEach((ticker) => {
     const cell = document.createElement("div");
     cell.className = "heat-cell";
@@ -2425,6 +2540,14 @@ function init() {
   initTickerAutocomplete("chart2-ticker-input", "chart2-ticker-suggestions", (symbol) => comparisonChart.selectTicker(symbol));
   initTimeseriesWindowButtons();
   initHealthTab();
+  initSortPills("overview-sort", (dir) => {
+    overviewSortDir = dir;
+    renderOverviewTiles();
+  });
+  initSortPills("watchlist-sort", (dir) => {
+    watchlistSortDir = dir;
+    renderWatchlistTiles();
+  });
   document.getElementById("refresh-btn").addEventListener("click", loadQuotes);
   TICKER_SELECT_IDS.forEach((id) => {
     const select = document.getElementById(id);

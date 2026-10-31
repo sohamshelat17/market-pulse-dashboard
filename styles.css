@@ -685,6 +685,36 @@ body {
   flex-wrap: wrap;
 }
 
+.sort-control {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sort-pill {
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.sort-pill:hover {
+  color: var(--text-primary);
+}
+
+.sort-pill.active {
+  color: #fff;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
 /* ---------- ticker tables ---------- */
 
 .groups-stack {
@@ -720,11 +750,6 @@ body {
   background: var(--dot-green);
   flex: 0 0 auto;
 }
-
-.panel-header[data-accent="blue"] .dot { background: var(--blue); }
-.panel-header[data-accent="violet"] .dot { background: var(--violet); }
-.panel-header[data-accent="green"] .dot { background: var(--dot-green); }
-.panel-header[data-accent="amber"] .dot { background: var(--amber); }
 
 .section-title {
   display: flex;
@@ -762,9 +787,68 @@ table.ticker-table {
 
 .ticker-table th:first-child,
 .ticker-table th:nth-child(2),
+.ticker-table th:nth-child(3),
 .ticker-table td:first-child,
-.ticker-table td:nth-child(2) {
+.ticker-table td:nth-child(2),
+.ticker-table td:nth-child(3) {
   text-align: left;
+}
+
+.ticker-table .group-cell {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 20px;
+}
+
+.sortable-th:hover {
+  color: var(--text-primary);
+}
+
+.sortable-th::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 4px solid transparent;
+  opacity: 0.35;
+}
+
+.sortable-th.sort-desc::after {
+  border-top-color: var(--text-primary);
+  margin-top: 2px;
+  opacity: 1;
+}
+
+.sortable-th.sort-asc::after {
+  border-bottom-color: var(--text-primary);
+  margin-top: -2px;
+  opacity: 1;
+}
+
+/* Bounded, independently-scrolling region with a pinned header -- unlike
+   the old per-group panels (short enough to never need this), these two
+   tables now hold every tracked ticker in one flat, sortable table, long
+   enough that losing the header while scrolling would make the columns
+   unreadable. table-wrap is the nearest ancestor with its own overflow
+   (not .panel, which only clips for rounded corners and never actually
+   scrolls), so it's the correct sticky-containing scroll box. */
+.sortable-table-wrap {
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.sortable-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg);
+  z-index: 1;
 }
 
 .ticker-table td {
@@ -797,21 +881,6 @@ table.ticker-table {
   border-radius: 5px;
   color: var(--blue);
   background: var(--blue-bg);
-}
-
-.panel-header[data-accent="violet"] + .table-wrap .ticker-badge {
-  color: var(--violet);
-  background: var(--violet-bg);
-}
-
-.panel-header[data-accent="green"] + .table-wrap .ticker-badge {
-  color: var(--dot-green);
-  background: var(--green-bg);
-}
-
-.panel-header[data-accent="amber"] + .table-wrap .ticker-badge {
-  color: var(--amber);
-  background: var(--amber-bg);
 }
 
 .name-cell {
@@ -849,7 +918,8 @@ table.ticker-table {
 
   .panel-header .constituents-ticker-select,
   .panel-header .timeseries-window-select,
-  .panel-header .calendar-ticker-label {
+  .panel-header .calendar-ticker-label,
+  .panel-header .sort-control {
     margin-left: 0;
     width: 100%;
   }

@@ -31,6 +31,11 @@
         <div class="panel-header">
           <span class="dot" style="background: var(--dot-green)"></span>
           Today's advance / decline — all tickers
+          <div class="sort-control" id="overview-sort">
+            <button class="sort-pill active" data-dir="default">Default</button>
+            <button class="sort-pill" data-dir="desc">High → Low</button>
+            <button class="sort-pill" data-dir="asc">Low → High</button>
+          </div>
         </div>
         <div id="overview-heatmap" class="overview-heatmap"></div>
       </div>
@@ -212,6 +217,11 @@
         <div class="panel-header">
           <span class="dot" style="background: var(--dot-green)"></span>
           Watchlist heatmap
+          <div class="sort-control" id="watchlist-sort">
+            <button class="sort-pill active" data-dir="default">Default</button>
+            <button class="sort-pill" data-dir="desc">High → Low</button>
+            <button class="sort-pill" data-dir="asc">Low → High</button>
+          </div>
         </div>
         <div id="watchlist-heatmap" class="overview-heatmap">
           <div class="chart-status static">Loading…</div>
@@ -237,13 +247,15 @@
         <span id="updated-at" class="updated-at">Loading…</span>
         <button id="refresh-btn" class="refresh-btn">Refresh</button>
       </div>
-      <div id="groups" class="groups-stack"></div>
+      <div id="groups">
+        <div class="chart-status static">Loading…</div>
+      </div>
 
       <div class="section-title">
         <span class="dot" style="background: var(--dot-green)"></span>
         Returns by period — all tickers
       </div>
-      <div id="returns-table" class="groups-stack">
+      <div id="returns-table">
         <div class="chart-status static">Loading…</div>
       </div>
     </section>
