@@ -71,6 +71,21 @@ RANGE_CONFIGS = {
 DEFAULT_RANGE = "ALL"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def get_finnhub_api_key():
+    """The real deployment (Render) sets FINNHUB_API_KEY as an actual
+    environment variable. Locally, this dev server's launcher has no way
+    to inject process env vars, so finnhub_key.txt (gitignored, never
+    committed) is read as a fallback -- it should never exist in prod."""
+    key = os.environ.get("FINNHUB_API_KEY")
+    if key:
+        return key
+    key_file = os.path.join(BASE_DIR, "finnhub_key.txt")
+    if os.path.exists(key_file):
+        with open(key_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return None
+
 # Groups shown on the Market Pulse tab, in display order.
 TICKER_GROUPS = [
     {
@@ -705,7 +720,7 @@ HEALTH_TTL_SECONDS = 4 * 3600  # earnings/estimates/analyst data barely moves in
 
 def fetch_all_health():
     symbols = [t["symbol"] for t in watchlist.WATCHLIST_TICKERS]
-    return financials.fetch_all_health(symbols, lambda u: fetch_json(u, authed=True))
+    return financials.fetch_all_health(symbols, get_finnhub_api_key())
 
 
 def build_health_response():
@@ -727,8 +742,6 @@ def build_health_response():
                 "changePercent": p.get("changePercent"),
                 "earningsHistory": h.get("earningsHistory", []),
                 "nextEarnings": h.get("nextEarnings"),
-                "estimates": h.get("estimates"),
-                "epsRevisions": h.get("epsRevisions"),
                 "ratios": h.get("ratios"),
                 "annualTrend": h.get("annualTrend", []),
             }

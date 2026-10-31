@@ -1,29 +1,73 @@
 """Per-ticker financial-health snapshot for the watchlist -- earnings
-history, forward estimates, revenue/profit QoQ and YoY growth, and
-balance-sheet/cash-flow health ratios, all from one extra authed Yahoo
-quoteSummary call per ticker (same auth mechanism server.py already
-uses for P/E). Fetched in parallel across the whole watchlist and
-cached for hours in server.py, since none of this moves intraday the
-way a price does.
+history, revenue/profit QoQ and YoY growth, and balance-sheet health
+ratios, sourced from Finnhub (a real, authenticated free-tier API)
+rather than Yahoo's unofficial endpoints.
 
-QoQ growth is computed here from the two most recent quarters in
-incomeStatementHistoryQuarterly (Yahoo only exposes 4 trailing
-quarters, not enough to also derive a same-quarter-last-year figure).
-YoY growth instead comes straight from financialData's own
-revenueGrowth/earningsGrowth, which Yahoo already computes against the
-year-ago quarter.
+Switched from Yahoo after its authenticated quoteSummary endpoint --
+the only source for this data -- started getting rate-limited hard
+enough specifically on Render's IP that the whole Financial Health tab
+went permanently blank in production while working fine from a
+developer machine's own IP (Yahoo's API is unofficial/reverse-
+engineered and known to treat datacenter IPs far more aggressively
+than residential ones). Finnhub is a real API with its own issued key,
+not a scraped consumer endpoint, so it doesn't carry that same
+IP-reputation risk.
 
-A non-equity holding in the watchlist (e.g. a gold trust) simply comes
-back with most of these modules empty rather than an error -- every
-field here degrades to None rather than raising, and the frontend
-already renders missing values as "N/A".
+Three calls per ticker -- earnings history, the earnings calendar, and
+one "basic financials" bag that includes both flat ratios and a
+multi-quarter time series for several of them:
+  - Finnhub's "growth" fields in the flat metric bag are percentages
+    (16.36 meaning 16.36%); its time-series values and debt/equity are
+    plain fractions/ratios (0.27 meaning 27%, or a straight multiple).
+    Both get normalized to the fraction convention the frontend already
+    expects (it does its own x100 for display).
+  - Finnhub doesn't expose absolute dollar figures (cash, debt, free
+    cash flow) on this tier, nor a forward multi-period estimate
+    breakdown the way Yahoo's earningsTrend did -- those are simply
+    left out now rather than faked; the frontend renders a missing
+    section as empty rather than a wall of N/A.
+  - QoQ growth comes from the two most recent points in the metric
+    bag's own quarterly eps/salesPerShare series (per-share, but swings
+    in share count are small quarter to quarter, so this approximates
+    revenue/net-income growth closely); YoY growth uses Finnhub's own
+    pre-computed quarterlyYoy figures instead of being derived here.
+
+A non-equity watchlist holding (e.g. a gold trust) simply comes back
+with these fields empty rather than an error -- every field here
+degrades to None rather than raising.
 """
 
+import json
+import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
-QUOTE_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-HEALTH_MODULES = "earningsHistory,earningsTrend,calendarEvents,financialData,incomeStatementHistory,incomeStatementHistoryQuarterly"
+import finnhub_throttle
+
+FINNHUB_BASE = "https://finnhub.io/api/v1"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+REQUEST_TIMEOUT = 12
+ANNUAL_TREND_YEARS = 10
+
+
+def _fetch_json(url, api_key):
+    sep = "&" if "?" in url else "?"
+    target = f"{url}{sep}token={api_key}"
+    retry_delay = 1.0
+    for attempt in range(4):
+        finnhub_throttle.wait_turn()
+        req = Request(target, headers=HEADERS)
+        try:
+            with urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                return json.load(resp)
+        except HTTPError as exc:
+            if exc.code == 429 and attempt < 3:
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            raise
 
 
 def _pct_change(current, previous):
@@ -32,113 +76,112 @@ def _pct_change(current, previous):
     return (current - previous) / abs(previous)
 
 
-def _raw(section, key):
-    val = (section or {}).get(key)
-    return val.get("raw") if isinstance(val, dict) else None
+def _series_latest_two(series_quarterly, key):
+    arr = series_quarterly.get(key) or []
+    latest = arr[0].get("v") if len(arr) > 0 else None
+    prior = arr[1].get("v") if len(arr) > 1 else None
+    return latest, prior
 
 
-def _estimate_growth(trend_by_period, period):
-    t = trend_by_period.get(period)
-    if not t:
-        return None
-    return {
-        "epsGrowth": _raw(t.get("earningsEstimate", {}), "growth"),
-        "revenueGrowth": _raw(t.get("revenueEstimate", {}), "growth"),
-    }
-
-
-def fetch_health_one(symbol, fetch_json_authed):
-    url = f"{QUOTE_SUMMARY_URL.format(symbol=quote(symbol))}?modules={HEALTH_MODULES}"
-    payload = fetch_json_authed(url)
-    result = payload["quoteSummary"]["result"][0]
-
+def fetch_health_one(symbol, api_key):
+    # Last 4 quarters' EPS actual vs estimate -- Finnhub returns newest
+    # first; flip to oldest->newest to match the detail view's table.
+    earnings_raw = _fetch_json(f"{FINNHUB_BASE}/stock/earnings?symbol={symbol}", api_key) or []
     earnings_history = [
         {
-            "quarter": q.get("quarter", {}).get("fmt"),
-            "epsActual": _raw(q, "epsActual"),
-            "epsEstimate": _raw(q, "epsEstimate"),
-            "surprisePercent": _raw(q, "surprisePercent"),
+            "quarter": e.get("period"),
+            "epsActual": e.get("actual"),
+            "epsEstimate": e.get("estimate"),
+            "surprisePercent": (e["surprisePercent"] / 100) if e.get("surprisePercent") is not None else None,
         }
-        for q in result.get("earningsHistory", {}).get("history", [])
+        for e in list(reversed(earnings_raw))[-4:]
     ]
 
-    cal_earnings = result.get("calendarEvents", {}).get("earnings", {})
-    earnings_dates = cal_earnings.get("earningsDate", [])
-    next_earnings = {
-        "date": earnings_dates[0].get("fmt") if earnings_dates else None,
-        "isEstimate": cal_earnings.get("isEarningsDateEstimate"),
-        "epsEstimate": _raw(cal_earnings, "earningsAverage"),
-        "revenueEstimate": _raw(cal_earnings, "revenueAverage"),
-    }
+    # Next scheduled earnings date, if announced within the next ~90 days.
+    today = datetime.now(timezone.utc).date()
+    future = today + timedelta(days=90)
+    cal = _fetch_json(
+        f"{FINNHUB_BASE}/calendar/earnings?from={today.isoformat()}&to={future.isoformat()}&symbol={symbol}",
+        api_key,
+    )
+    entries = (cal or {}).get("earningsCalendar") or []
+    next_earnings = None
+    if entries:
+        e = entries[0]
+        next_earnings = {
+            "date": e.get("date"),
+            "isEstimate": None,  # Finnhub's calendar doesn't flag confirmed-vs-estimated
+            "epsEstimate": e.get("epsEstimate"),
+            "revenueEstimate": e.get("revenueEstimate"),
+        }
 
-    trend = result.get("earningsTrend", {}).get("trend", [])
-    trend_by_period = {t.get("period"): t for t in trend}
-    current_q_revisions = trend_by_period.get("0q", {}).get("epsRevisions", {})
+    # Basic financials -- a flat bag of ratios/growth plus a multi-quarter
+    # (and multi-year) time series for several of the same metrics.
+    metric_payload = _fetch_json(f"{FINNHUB_BASE}/stock/metric?symbol={symbol}&metric=all", api_key) or {}
+    metric = metric_payload.get("metric") or {}
+    series = metric_payload.get("series") or {}
+    series_q = series.get("quarterly") or {}
+    series_a = series.get("annual") or {}
 
-    fd = result.get("financialData", {})
+    net_margin, net_margin_prior = _series_latest_two(series_q, "netMargin")
+    gross_margin, _ = _series_latest_two(series_q, "grossMargin")
+    operating_margin, _ = _series_latest_two(series_q, "operatingMargin")
+    roe, _ = _series_latest_two(series_q, "roeTTM")
+    roa, _ = _series_latest_two(series_q, "roaTTM")
+    debt_equity, _ = _series_latest_two(series_q, "totalDebtToEquity")
+    current_ratio, _ = _series_latest_two(series_q, "currentRatio")
+    quick_ratio, _ = _series_latest_two(series_q, "quickRatio")
+    eps_latest, eps_prior = _series_latest_two(series_q, "eps")
+    sales_latest, sales_prior = _series_latest_two(series_q, "salesPerShare")
 
-    income_hist = result.get("incomeStatementHistory", {}).get("incomeStatementHistory", [])
+    def pct_field(key):
+        val = metric.get(key)
+        return (val / 100) if val is not None else None
+
+    # Finnhub's annual series goes back decades (AAPL's starts in 1985) --
+    # far more history than is useful to scan at a glance, so this keeps
+    # only the most recent ANNUAL_TREND_YEARS. Newest-first like the
+    # quarterly series, so the cap is a plain head-slice before reversing
+    # to oldest->newest for display.
+    annual_eps = (series_a.get("eps") or [])[:ANNUAL_TREND_YEARS]
+    annual_sales = series_a.get("salesPerShare") or []
     annual_trend = [
         {
-            "year": (h.get("endDate", {}).get("fmt") or "")[:4] or None,
-            "revenue": _raw(h, "totalRevenue"),
-            "netIncome": _raw(h, "netIncome"),
+            "year": (annual_eps[i].get("period") or "")[:4] or None,
+            "eps": annual_eps[i].get("v"),
+            "revenuePerShare": annual_sales[i].get("v") if i < len(annual_sales) else None,
         }
-        for h in income_hist
+        for i in range(len(annual_eps))
     ]
     annual_trend.reverse()  # oldest -> newest
-
-    # Most recent two quarters only -- enough for a QoQ comparison; Yahoo's
-    # own financialData growth figures (below) cover YoY instead.
-    quarterly_hist = result.get("incomeStatementHistoryQuarterly", {}).get("incomeStatementHistory", [])
-    latest_q = quarterly_hist[0] if quarterly_hist else {}
-    prior_q = quarterly_hist[1] if len(quarterly_hist) > 1 else {}
-    latest_revenue = _raw(latest_q, "totalRevenue")
-    latest_net_income = _raw(latest_q, "netIncome")
-    prior_revenue = _raw(prior_q, "totalRevenue")
-    prior_net_income = _raw(prior_q, "netIncome")
-    net_margin = (latest_net_income / latest_revenue) if (latest_net_income is not None and latest_revenue) else None
-    prior_net_margin = (prior_net_income / prior_revenue) if (prior_net_income is not None and prior_revenue) else None
 
     return {
         "earningsHistory": earnings_history,
         "nextEarnings": next_earnings,
-        "estimates": {
-            "currentQuarter": _estimate_growth(trend_by_period, "0q"),
-            "nextQuarter": _estimate_growth(trend_by_period, "+1q"),
-            "currentYear": _estimate_growth(trend_by_period, "0y"),
-            "nextYear": _estimate_growth(trend_by_period, "+1y"),
-        },
-        "epsRevisions": {
-            "upLast30days": _raw(current_q_revisions, "upLast30days"),
-            "downLast30days": _raw(current_q_revisions, "downLast30days"),
-        },
         "ratios": {
-            "revenueGrowthYoY": _raw(fd, "revenueGrowth"),
-            "revenueGrowthQoQ": _pct_change(latest_revenue, prior_revenue),
-            "netIncomeGrowthYoY": _raw(fd, "earningsGrowth"),
-            "netIncomeGrowthQoQ": _pct_change(latest_net_income, prior_net_income),
+            "revenueGrowthYoY": pct_field("revenueGrowthQuarterlyYoy"),
+            "revenueGrowthQoQ": _pct_change(sales_latest, sales_prior),
+            "netIncomeGrowthYoY": pct_field("epsGrowthQuarterlyYoy"),
+            "netIncomeGrowthQoQ": _pct_change(eps_latest, eps_prior),
             "netMargin": net_margin,
-            "netMarginChangeQoQ": (net_margin - prior_net_margin) if (net_margin is not None and prior_net_margin is not None) else None,
-            "grossMargins": _raw(fd, "grossMargins"),
-            "operatingMargins": _raw(fd, "operatingMargins"),
-            "returnOnEquity": _raw(fd, "returnOnEquity"),
-            "returnOnAssets": _raw(fd, "returnOnAssets"),
-            "debtToEquity": _raw(fd, "debtToEquity"),
-            "currentRatio": _raw(fd, "currentRatio"),
-            "quickRatio": _raw(fd, "quickRatio"),
-            "freeCashflow": _raw(fd, "freeCashflow"),
-            "operatingCashflow": _raw(fd, "operatingCashflow"),
-            "totalCash": _raw(fd, "totalCash"),
-            "totalDebt": _raw(fd, "totalDebt"),
+            "netMarginChangeQoQ": (net_margin - net_margin_prior)
+            if (net_margin is not None and net_margin_prior is not None)
+            else None,
+            "grossMargins": gross_margin,
+            "operatingMargins": operating_margin,
+            "returnOnEquity": roe,
+            "returnOnAssets": roa,
+            "debtToEquity": (debt_equity * 100) if debt_equity is not None else None,
+            "currentRatio": current_ratio,
+            "quickRatio": quick_ratio,
         },
         "annualTrend": annual_trend,
     }
 
 
-# TODO: remove once the prod data gap is diagnosed. Module-level (not
-# per-Cache-load) so the most recent failure is still readable even when
-# fetch_all_health raises below and the Cache discards that attempt's data.
+# Module-level (not per-Cache-load) so the most recent failure is still
+# readable even when fetch_all_health raises below and the Cache discards
+# that attempt's data.
 _last_error = None
 
 
@@ -146,11 +189,15 @@ def get_last_error():
     return _last_error
 
 
-def fetch_all_health(symbols, fetch_json_authed):
+def fetch_all_health(symbols, api_key):
     global _last_error
+    if not api_key:
+        _last_error = "FINNHUB_API_KEY is not configured"
+        raise RuntimeError(_last_error)
+
     results = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(fetch_health_one, s, fetch_json_authed): s for s in symbols}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(fetch_health_one, s, api_key): s for s in symbols}
         for future, symbol in futures.items():
             try:
                 results[symbol] = future.result()
@@ -164,13 +211,13 @@ def fetch_all_health(symbols, fetch_json_authed):
     # ones that came back empty, serially, now that the burst has settled.
     for symbol in [s for s, r in results.items() if not r]:
         try:
-            results[symbol] = fetch_health_one(symbol, fetch_json_authed)
+            results[symbol] = fetch_health_one(symbol, api_key)
         except Exception as exc:  # noqa: BLE001
             _last_error = f"{type(exc).__name__}: {exc}"
 
     # If literally every ticker failed, this almost certainly isn't 75
-    # independent per-ticker problems -- it's something systemic (an auth
-    # failure, a network block, Yahoo rate-limiting). Raising here (instead
+    # independent per-ticker problems -- it's something systemic (a bad
+    # key, a network block, Finnhub rate-limiting). Raising here (instead
     # of quietly "succeeding" with an all-empty result) matters because the
     # caller is a Cache: a successful-looking empty load gets stamped as
     # fresh and won't be retried again for the full TTL, so a systemic

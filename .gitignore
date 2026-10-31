@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 data/
+
+# Local-only Finnhub API key for dev testing (see server.py's
+# get_finnhub_api_key) -- never committed. Production reads the real
+# FINNHUB_API_KEY environment variable instead.
+finnhub_key.txt

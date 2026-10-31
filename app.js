@@ -2328,18 +2328,6 @@ function fmtEarningsHistoryRow(q) {
   `;
 }
 
-function fmtEstimateRow(label, est) {
-  if (!est) return `<tr><td>${label}</td><td class="na" colspan="2">N/A</td></tr>`;
-  const epsCls = est.epsGrowth == null ? "na" : est.epsGrowth >= 0 ? "up" : "down";
-  const revCls = est.revenueGrowth == null ? "na" : est.revenueGrowth >= 0 ? "up" : "down";
-  return `
-    <tr>
-      <td>${label}</td>
-      <td class="${epsCls}">${fmtPctFraction(est.epsGrowth)} EPS</td>
-      <td class="${revCls}">${fmtPctFraction(est.revenueGrowth)} Rev</td>
-    </tr>
-  `;
-}
 
 function renderHealthDetail(t) {
   const titleEl = document.getElementById("health-detail-title");
@@ -2348,17 +2336,9 @@ function renderHealthDetail(t) {
   const next = t.nextEarnings || {};
   const earningsFmt = fmtDaysAway(next.date, next.isEstimate);
   const ratios = t.ratios || {};
-  const estimates = t.estimates || {};
 
   const earningsHistoryRows =
     (t.earningsHistory || []).map(fmtEarningsHistoryRow).join("") || `<tr><td colspan="4" class="na">No data</td></tr>`;
-
-  const estimateRows = [
-    fmtEstimateRow("This quarter", estimates.currentQuarter),
-    fmtEstimateRow("Next quarter", estimates.nextQuarter),
-    fmtEstimateRow("This year", estimates.currentYear),
-    fmtEstimateRow("Next year", estimates.nextYear),
-  ].join("");
 
   const annualRows =
     (t.annualTrend || [])
@@ -2366,8 +2346,8 @@ function renderHealthDetail(t) {
         (y) => `
         <tr>
           <td>${y.year || "N/A"}</td>
-          <td>${y.revenue == null ? "N/A" : fmtDollarAbbrev(y.revenue)}</td>
-          <td>${y.netIncome == null ? "N/A" : fmtDollarAbbrev(y.netIncome)}</td>
+          <td>${y.eps == null ? "N/A" : `$${y.eps.toFixed(2)}`}</td>
+          <td>${y.revenuePerShare == null ? "N/A" : `$${y.revenuePerShare.toFixed(2)}`}</td>
         </tr>
       `
       )
@@ -2384,21 +2364,6 @@ function renderHealthDetail(t) {
         <thead><tr><th>Quarter</th><th>EPS Actual</th><th>EPS Estimate</th><th>Surprise</th></tr></thead>
         <tbody>${earningsHistoryRows}</tbody>
       </table>
-    </div>
-
-    <div class="health-section">
-      <div class="health-section-title">Forward Estimates</div>
-      <table class="ticker-table">
-        <thead><tr><th>Period</th><th>EPS Growth</th><th>Revenue Growth</th></tr></thead>
-        <tbody>${estimateRows}</tbody>
-      </table>
-      ${
-        t.epsRevisions
-          ? `<p class="health-note">Analyst estimate revisions (last 30 days): <span class="up">${
-              t.epsRevisions.upLast30days ?? 0
-            } up</span> · <span class="down">${t.epsRevisions.downLast30days ?? 0} down</span></p>`
-          : ""
-      }
     </div>
 
     <div class="health-section">
@@ -2423,17 +2388,13 @@ function renderHealthDetail(t) {
         ${statCard("Debt / Equity", fmtPctRaw(ratios.debtToEquity))}
         ${statCard("Current Ratio", fmtRatio(ratios.currentRatio))}
         ${statCard("Quick Ratio", fmtRatio(ratios.quickRatio))}
-        ${statCard("Free Cash Flow", ratios.freeCashflow == null ? "N/A" : fmtDollarAbbrev(ratios.freeCashflow))}
-        ${statCard("Operating Cash Flow", ratios.operatingCashflow == null ? "N/A" : fmtDollarAbbrev(ratios.operatingCashflow))}
-        ${statCard("Total Cash", ratios.totalCash == null ? "N/A" : fmtDollarAbbrev(ratios.totalCash))}
-        ${statCard("Total Debt", ratios.totalDebt == null ? "N/A" : fmtDollarAbbrev(ratios.totalDebt))}
       </div>
     </div>
 
     <div class="health-section">
-      <div class="health-section-title">Annual Trend</div>
+      <div class="health-section-title">Annual Trend (Per Share)</div>
       <table class="ticker-table">
-        <thead><tr><th>Year</th><th>Revenue</th><th>Net Income</th></tr></thead>
+        <thead><tr><th>Year</th><th>EPS</th><th>Revenue/Share</th></tr></thead>
         <tbody>${annualRows}</tbody>
       </table>
     </div>
